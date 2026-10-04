@@ -1,4 +1,6 @@
-/* regex.c : compact POSIX-ERE regex engine with convenience extensions */
+/* regex.c : compact POSIX-ERE regex engine with convenience extensions
+ * SPDX-License-Identifier: 0BSD OR CC0-1.0
+ */
 /*
  * A single-file regular expression matcher and substitution engine meant
  * to be dropped into a sed, a vi clone, a grep, or any small text tool.
