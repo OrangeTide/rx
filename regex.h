@@ -1,4 +1,6 @@
-/* regex.h : public interface for the compact regex engine */
+/* regex.h : public interface for the compact regex engine
+ * SPDX-License-Identifier: 0BSD OR CC0-1.0
+ */
 
 #ifndef REGEX_H
 #define REGEX_H
