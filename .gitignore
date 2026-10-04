@@ -1,0 +1,12 @@
+# Build artifacts
+rsed
+rxtest
+torturet
+torture-asan
+torture-ubsan
+torture-cov
+
+# Coverage data
+*.gcno
+*.gcda
+*.gcov
