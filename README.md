@@ -17,7 +17,10 @@ make cli    # build the rsed command-line tool
 make clean
 ```
 
-`CC` and `CFLAGS` are overridable, for example `make test CC=clang`.
+`make cli` writes the `rsed` binary to the top level. The test targets
+build their binaries under `tests/` (`tests/rxtest`, `tests/torturet`,
+and so on) and `make clean` removes all of them. `CC` and `CFLAGS` are
+overridable, for example `make test CC=clang`.
 
 ## Testing
 
