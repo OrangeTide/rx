@@ -56,7 +56,7 @@ rx_fi_calloc(size_t a, size_t b)
 #define realloc rx_fi_realloc
 #define calloc  rx_fi_calloc
 
-#include "regex.c"
+#include "../regex.c"
 
 static int tests, fails;
 

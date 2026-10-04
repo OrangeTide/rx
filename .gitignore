@@ -1,12 +1,12 @@
 # Build artifacts
 rsed
-rxtest
-torturet
-torture-asan
-torture-ubsan
-torture-fault
-torture-vg
-torture-cov
+tests/rxtest
+tests/torturet
+tests/torture-asan
+tests/torture-ubsan
+tests/torture-fault
+tests/torture-vg
+tests/torture-cov
 
 # Coverage data
 *.gcno

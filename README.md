@@ -28,12 +28,13 @@ make asan      # torture suite under AddressSanitizer + leak detection
 make ubsan     # torture suite under UndefinedBehaviorSanitizer
 make fault     # allocation-failure sweep under ASan (fuzzer skipped)
 make valgrind  # the same sweep under valgrind memcheck
-make cov       # line coverage; writes regex.c.gcov
+make cov       # line coverage; writes tests/regex.c.gcov
 ```
 
-`torture.c` includes `regex.c` directly so the sanitizers and `gcov` see
-the whole engine as one translation unit. The torture target takes an
-optional iteration count, for example `./torturet 100000`.
+The test sources live under `tests/`. `tests/torture.c` includes
+`regex.c` directly so the sanitizers and `gcov` see the whole engine as
+one translation unit. The torture target takes an optional iteration
+count, for example `./tests/torturet 100000`.
 
 The fault sweep routes every allocation in the engine through a hook that
 fails the Nth allocation in turn. For each operation it first counts the

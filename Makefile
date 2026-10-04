@@ -1,6 +1,7 @@
 CC      ?= cc
 CFLAGS  ?= -std=c99 -Wall -Wextra -O2
 SRC      = regex.c
+TESTS    = tests
 
 .PHONY: all test cli torture asan ubsan fault valgrind cov clean
 
@@ -16,59 +17,67 @@ rsed: $(SRC)
 	$(CC) $(CFLAGS) -D_GNU_SOURCE -DRX_MAIN $(SRC) -o $@
 
 # Build and run the in-file self-test harness.
-test: rxtest
-	./rxtest
+test: $(TESTS)/rxtest
+	./$(TESTS)/rxtest
 
-rxtest: $(SRC)
+$(TESTS)/rxtest: $(SRC)
 	$(CC) $(CFLAGS) -DRX_TEST $(SRC) -o $@
 
 # A smaller per-search step budget keeps pathological fuzz patterns from
 # dominating the run time while still exercising the abort path.
 TORTURE_CFLAGS = -DRX_STEP_LIMIT=2000000
 
-# Build and run the heavy torture + fuzz suite. torture.c includes
-# regex.c directly.
-torture: torturet
-	./torturet
+# The torture suite lives in tests/ and includes ../regex.c directly so the
+# sanitizers and gcov see the whole engine as one translation unit.
+TORTURE_SRC = $(TESTS)/torture.c
 
-torturet: torture.c $(SRC)
-	$(CC) $(CFLAGS) $(TORTURE_CFLAGS) torture.c -o $@
+# Build and run the heavy torture + fuzz suite.
+torture: $(TESTS)/torturet
+	./$(TESTS)/torturet
+
+$(TESTS)/torturet: $(TORTURE_SRC) $(SRC)
+	$(CC) $(CFLAGS) $(TORTURE_CFLAGS) $(TORTURE_SRC) -o $@
 
 # Torture suite under AddressSanitizer (plus leak detection).
-asan: torture.c $(SRC)
+asan: $(TORTURE_SRC) $(SRC)
 	$(CC) -std=c99 -Wall -Wextra -g -O1 $(TORTURE_CFLAGS) \
-	    -fsanitize=address -fno-omit-frame-pointer torture.c -o torture-asan
-	./torture-asan 5000
+	    -fsanitize=address -fno-omit-frame-pointer $(TORTURE_SRC) \
+	    -o $(TESTS)/torture-asan
+	./$(TESTS)/torture-asan 5000
 
 # Torture suite under UndefinedBehaviorSanitizer.
-ubsan: torture.c $(SRC)
+ubsan: $(TORTURE_SRC) $(SRC)
 	$(CC) -std=c99 -Wall -Wextra -g -O1 $(TORTURE_CFLAGS) \
 	    -fsanitize=undefined -fno-sanitize-recover=all \
-	    -fno-omit-frame-pointer torture.c -o torture-ubsan
-	./torture-ubsan 5000
+	    -fno-omit-frame-pointer $(TORTURE_SRC) -o $(TESTS)/torture-ubsan
+	./$(TESTS)/torture-ubsan 5000
 
 # Exhaustive allocation-failure sweep under AddressSanitizer. Every
 # allocation in the engine is failed in turn; the leak detector proves
 # each error path releases its partial state. The "0" argument skips the
 # fuzzer so this target is just the sweep.
-fault: torture.c $(SRC)
+fault: $(TORTURE_SRC) $(SRC)
 	$(CC) -std=c99 -Wall -Wextra -g -O1 $(TORTURE_CFLAGS) \
-	    -fsanitize=address -fno-omit-frame-pointer torture.c -o torture-fault
-	./torture-fault 0
+	    -fsanitize=address -fno-omit-frame-pointer $(TORTURE_SRC) \
+	    -o $(TESTS)/torture-fault
+	./$(TESTS)/torture-fault 0
 
 # Allocation-failure sweep under valgrind memcheck, an independent check
 # on the error-path cleanup (uninstrumented build; the fuzzer is skipped).
-valgrind: torture.c $(SRC)
-	$(CC) -std=c99 -Wall -Wextra -g -O1 $(TORTURE_CFLAGS) torture.c -o torture-vg
-	$(VALGRIND) ./torture-vg 0
+valgrind: $(TORTURE_SRC) $(SRC)
+	$(CC) -std=c99 -Wall -Wextra -g -O1 $(TORTURE_CFLAGS) \
+	    $(TORTURE_SRC) -o $(TESTS)/torture-vg
+	$(VALGRIND) ./$(TESTS)/torture-vg 0
 
-# Line coverage of the engine from the torture suite.
-cov: torture.c $(SRC)
-	$(CC) -std=c99 -O0 -g $(TORTURE_CFLAGS) --coverage torture.c -o torture-cov
-	./torture-cov
-	gcov torture-cov-torture >/dev/null 2>&1 || true
-	@echo "see regex.c.gcov for per-line counts"
+# Line coverage of the engine from the torture suite. Built and run inside
+# tests/ so the coverage artifacts stay out of the top level.
+cov: $(TORTURE_SRC) $(SRC)
+	cd $(TESTS) && $(CC) -std=c99 -O0 -g $(TORTURE_CFLAGS) --coverage \
+	    torture.c -o torture-cov && ./torture-cov && \
+	    gcov torture-cov-torture >/dev/null 2>&1 || true
+	@echo "see $(TESTS)/regex.c.gcov for per-line counts"
 
 clean:
-	rm -f rsed rxtest torturet torture-asan torture-ubsan torture-fault \
-	    torture-vg torture-cov *.gcno *.gcda *.gcov
+	rm -f rsed $(TESTS)/rxtest $(TESTS)/torturet $(TESTS)/torture-asan \
+	    $(TESTS)/torture-ubsan $(TESTS)/torture-fault $(TESTS)/torture-vg \
+	    $(TESTS)/torture-cov $(TESTS)/*.gcno $(TESTS)/*.gcda $(TESTS)/*.gcov
