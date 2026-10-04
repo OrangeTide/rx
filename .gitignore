@@ -4,6 +4,7 @@ rxtest
 torturet
 torture-asan
 torture-ubsan
+torture-fault
 torture-cov
 
 # Coverage data

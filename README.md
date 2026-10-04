@@ -23,18 +23,28 @@ make clean
 
 ```sh
 make test      # the in-file self-test suite (regex.c -DRX_TEST)
-make torture   # heavy hand-verified battery plus a deterministic fuzzer
+make torture   # heavy hand-verified battery, fault sweep, and fuzzer
 make asan      # torture suite under AddressSanitizer + leak detection
 make ubsan     # torture suite under UndefinedBehaviorSanitizer
+make fault     # allocation-failure sweep under ASan (fuzzer skipped)
 make cov       # line coverage; writes regex.c.gcov
 ```
 
 `torture.c` includes `regex.c` directly so the sanitizers and `gcov` see
 the whole engine as one translation unit. The torture target takes an
-optional iteration count, for example `./torturet 100000`. The suites
-pass clean under ASan and UBSan with no leaks or undefined behavior.
-Coverage of `regex.c` is about 91%; the remainder is allocation-failure
-return paths and a few defensively-unreachable branches.
+optional iteration count, for example `./torturet 100000`.
+
+The fault sweep routes every allocation in the engine through a hook that
+fails the Nth allocation in turn. For each operation it first counts the
+allocations, then re-runs it once per allocation, failing exactly one and
+asserting the documented failure value is returned. Run under
+AddressSanitizer, the leak detector confirms every error path releases
+its partial state.
+
+The suites pass clean under ASan and UBSan with no leaks or undefined
+behavior. Coverage of `regex.c` is about 97%; the remainder is a handful
+of defensively-unreachable branches and allocation-failure paths that are
+only reachable at a specific reallocation boundary.
 
 To embed the engine in another program, compile `regex.c` with neither
 `RX_TEST` nor `RX_MAIN` defined and link it in. The public interface is

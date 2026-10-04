@@ -9,6 +9,52 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <ctype.h>
+#include <stdint.h>
+#include <stddef.h>
+
+/*
+ * Fault injection. Every allocation inside regex.c is routed through a
+ * hook that can fail the Nth allocation on demand. The hook is disarmed
+ * by default, so it is a zero-cost passthrough until a sweep arms it.
+ * The system headers are all included above first, so the macros below
+ * only ever rewrite allocation calls in regex.c's own code, never a
+ * header declaration. free() is left alone.
+ */
+static long rx_fi_count;    /* allocations seen while armed */
+static long rx_fi_fail_at;  /* fail this counted allocation; 0 disables */
+static int  rx_fi_armed;    /* only count/fail while set */
+
+static int
+rx_fi_trip(void)
+{
+    if (!rx_fi_armed)
+        return 0;
+    rx_fi_count++;
+    return rx_fi_fail_at && rx_fi_count == rx_fi_fail_at;
+}
+
+static void *
+rx_fi_malloc(size_t n)
+{
+    return rx_fi_trip() ? NULL : malloc(n);
+}
+
+static void *
+rx_fi_realloc(void *p, size_t n)
+{
+    return rx_fi_trip() ? NULL : realloc(p, n);
+}
+
+static void *
+rx_fi_calloc(size_t a, size_t b)
+{
+    return rx_fi_trip() ? NULL : calloc(a, b);
+}
+
+#define malloc  rx_fi_malloc
+#define realloc rx_fi_realloc
+#define calloc  rx_fi_calloc
 
 #include "regex.c"
 
@@ -263,6 +309,10 @@ battery(void)
     ck_sub("x", "x", "\\z", 0, "z");                    /* unknown \\ escape */
     ck_sub("(\\w)", "abc", "\\u\\1", RX_GLOBAL, "ABC"); /* \\u one-shot */
     ck_sub("(\\w)", "ABC", "\\l\\1", RX_GLOBAL, "abc"); /* \\l one-shot */
+    ck_sub("(\\w+)", "HELLO", "\\L\\1", 0, "hello");    /* \\L sticky */
+    ck_sub("x", "x", "\\n\\t\\r\\f\\v\\a\\\\", 0,       /* repl escapes */
+           "\n\t\r\f\v\a\\");
+    ck_sub("a", "a", "", 0, "");                        /* empty result */
 }
 
 /****************************************************************
@@ -352,6 +402,186 @@ api_edge(void)
         printf("FAIL NULL-safe entry points\n");
     }
     rx_free(NULL);      /* must be a no-op */
+}
+
+/****************************************************************
+ * Fault injection: exhaustive single-allocation-failure sweep.
+ *
+ * For each operation we first run it once, armed but failing nothing, to
+ * count how many allocations it makes. We then run it again once per
+ * allocation, failing exactly that one, and assert the documented
+ * failure value is returned. Run under AddressSanitizer (make fault),
+ * the leak detector proves every partial allocation is released on the
+ * error path.
+ ****************************************************************/
+
+static int fault_checks;
+
+static long
+fi_count(void)
+{
+    rx_fi_count = 0;
+    rx_fi_fail_at = 0;      /* count only, fail nothing */
+    rx_fi_armed = 1;
+    return 0;               /* caller reads rx_fi_count after the op */
+}
+
+static void
+fi_arm(long at)
+{
+    rx_fi_count = 0;
+    rx_fi_fail_at = at;
+    rx_fi_armed = 1;
+}
+
+static void
+fi_disarm(void)
+{
+    rx_fi_armed = 0;
+}
+
+static void
+sweep_compile(const char *pat)
+{
+    const char *err;
+    rx_t *re;
+    long k, i;
+
+    fi_count();
+    re = rx_compile(pat, 0, &err);
+    fi_disarm();
+    k = rx_fi_count;
+    if (re)
+        rx_free(re);
+
+    for (i = 1; i <= k; i++) {
+        fi_arm(i);
+        re = rx_compile(pat, 0, &err);
+        fi_disarm();
+        tests++;
+        fault_checks++;
+        if (re) {
+            fails++;
+            printf("FAIL fault compile /%s/ @%ld: returned non-NULL\n",
+                   pat, i);
+            rx_free(re);
+        }
+    }
+}
+
+static void
+sweep_exec(const char *pat, const char *s)
+{
+    const char *err;
+    rx_t *re = rx_compile(pat, 0, &err);
+    rx_match m[10];
+    size_t len = strlen(s);
+    long k, i;
+
+    tests++;
+    if (!re) {
+        fails++;
+        printf("FAIL fault-exec setup /%s/: %s\n", pat, err);
+        return;
+    }
+
+    fi_count();
+    rx_exec(re, s, len, 0, m, 10);
+    fi_disarm();
+    k = rx_fi_count;
+
+    for (i = 1; i <= k; i++) {
+        int r;
+
+        fi_arm(i);
+        r = rx_exec(re, s, len, 0, m, 10);
+        fi_disarm();
+        tests++;
+        fault_checks++;
+        if (r != -1) {
+            fails++;
+            printf("FAIL fault exec /%s/ on \"%s\" @%ld: got %d want -1\n",
+                   pat, s, i, r);
+        }
+    }
+    rx_free(re);
+}
+
+static void
+sweep_replace(const char *pat, const char *s, const char *repl, int flags)
+{
+    const char *err;
+    rx_t *re = rx_compile(pat, 0, &err);
+    size_t len = strlen(s);
+    char *out;
+    long k, i;
+
+    tests++;
+    if (!re) {
+        fails++;
+        printf("FAIL fault-replace setup /%s/: %s\n", pat, err);
+        return;
+    }
+
+    fi_count();
+    out = rx_replace(re, s, len, repl, flags);
+    fi_disarm();
+    k = rx_fi_count;
+    free(out);
+
+    for (i = 1; i <= k; i++) {
+        fi_arm(i);
+        out = rx_replace(re, s, len, repl, flags);
+        fi_disarm();
+        tests++;
+        fault_checks++;
+        if (out) {
+            fails++;
+            printf("FAIL fault replace /%s/ @%ld: returned non-NULL\n",
+                   pat, i);
+            free(out);
+        }
+    }
+    rx_free(re);
+}
+
+static void
+fault_suite(void)
+{
+    static char longa[128];
+    int i;
+
+    for (i = 0; i < (int)sizeof longa - 1; i++)
+        longa[i] = 'a';
+    longa[sizeof longa - 1] = '\0';
+
+    /* Compile: patterns that touch every allocation site (program growth,
+     * class bitmaps and the set list, quantifier templates, groups). */
+    sweep_compile("a");
+    sweep_compile("abcdefghijklmnop");          /* program realloc */
+    sweep_compile("[a-z0-9_]+");                 /* class set + list */
+    sweep_compile("[[:alpha:][:digit:]]");       /* multiple sets */
+    sweep_compile("(ab){2,5}c");                 /* interval templates */
+    sweep_compile("(a|bb|ccc)+d");               /* alternation templates */
+    sweep_compile("(\\w+)@(\\w+)\\.(\\w+)");     /* groups + shorthand */
+    sweep_compile("((a)(b)(c))*");               /* nested group saves */
+
+    /* Exec: patterns that grow the choice and undo stacks. */
+    sweep_exec("abc", "zzabc");
+    sweep_exec("a.*b.*c", "axxbyyczz");
+    sweep_exec("(a|bb|ccc)+z", "abbcccabb");
+    sweep_exec("(a)*", longa);                   /* undo + choice growth */
+    sweep_exec(".*x", longa);                    /* deep choice stack */
+    sweep_exec("(\\w+)@(\\w+)", "user@host");
+
+    /* Replace: output-buffer growth and the empty-match path. */
+    sweep_replace("", "abcde", "-", RX_GLOBAL);
+    sweep_replace("[aeiou]", "education", "_", RX_GLOBAL);
+    sweep_replace("(\\w+)", "one two three", "[\\1]", RX_GLOBAL);
+    sweep_replace("a", longa, "bb", RX_GLOBAL);  /* sbuf doubling */
+    sweep_replace("z", "abc", "y", RX_GLOBAL);   /* no match, tail only */
+
+    printf("fault: %d single-allocation-failure checks\n", fault_checks);
 }
 
 /****************************************************************
@@ -451,7 +681,8 @@ main(int argc, char **argv)
     battery();
     robustness();
     api_edge();
-    fuzz(iters);
+    fault_suite();
+    fuzz(iters);        /* iters == 0 skips the fuzzer */
 
     printf("%d tests, %d failures\n", tests, fails);
     return fails ? 1 : 0;
