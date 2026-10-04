@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+
+      - name: Self-test
+        run: make test
+
+      - name: Torture suite
+        run: make torture
+
+      - name: AddressSanitizer
+        run: make asan
+
+      - name: UndefinedBehaviorSanitizer
+        run: make ubsan
+
+      - name: Allocation-failure sweep
+        run: make fault
+
+      - name: Valgrind sweep
+        run: make valgrind
