@@ -1,13 +1,15 @@
 # regex
 
-A compact, single-file regular expression engine in C, meant to be
-dropped into a small text tool such as a sed, a vi clone, or a grep. It
-is a backtracking matcher, so it supports backreferences and the common
+A compact regular expression engine in C, meant to be dropped into a
+small text tool such as a sed, a vi clone, or a grep. It is a
+backtracking matcher, so it supports backreferences and the common
 conveniences found in GNU sed, Vim, and PCRE on top of the POSIX ERE
 core.
 
-Everything lives in `regex.c`: the public API, the engine, a self-test
-harness, and a sed-like command-line tool.
+The engine is two files: `regex.c` and `regex.h`. Drop both into a
+project and you have a working regex library. `regex.c` also carries a
+sed-like command-line tool behind the `RX_MAIN` compile flag. The tests
+live under `tests/`.
 
 ## Building
 
@@ -18,14 +20,14 @@ make clean
 ```
 
 `make cli` writes the `rsed` binary to the top level. The test targets
-build their binaries under `tests/` (`tests/rxtest`, `tests/torturet`,
+build their binaries under `tests/` (`tests/selftest`, `tests/torturet`,
 and so on) and `make clean` removes all of them. `CC` and `CFLAGS` are
 overridable, for example `make test CC=clang`.
 
 ## Testing
 
 ```sh
-make test      # the in-file self-test suite (regex.c -DRX_TEST)
+make test      # fast public-API self-test (tests/selftest.c)
 make torture   # heavy hand-verified battery, fault sweep, and fuzzer
 make asan      # torture suite under AddressSanitizer + leak detection
 make ubsan     # torture suite under UndefinedBehaviorSanitizer
@@ -52,10 +54,19 @@ behavior. Coverage of `regex.c` is about 97%; the remainder is a handful
 of defensively-unreachable branches and allocation-failure paths that are
 only reachable at a specific reallocation boundary.
 
-To embed the engine in another program, compile `regex.c` with neither
-`RX_TEST` nor `RX_MAIN` defined and link it in. The public interface is
-the declaration block at the top of `regex.c`; copy it into a `regex.h`
-if you prefer a separate header.
+To embed the engine in another program, copy `regex.c` and `regex.h`
+into your source tree, include `regex.h` where you call the API, and
+compile `regex.c` as an ordinary translation unit (with `RX_MAIN`
+undefined). For example:
+
+```sh
+cc -c regex.c -o regex.o
+cc yourprog.c regex.o -o yourprog
+```
+
+`regex.h` is the whole public interface. A few compile-time limits can
+be overridden with `-D` when building `regex.c`: `RX_STEP_LIMIT`,
+`RX_DUP_MAX`, and `RX_MAX_DEPTH`.
 
 ## Pattern syntax
 

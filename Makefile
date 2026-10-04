@@ -13,15 +13,15 @@ all: cli
 # Sed-like command-line tool: rsed [-gims] PATTERN REPLACEMENT < input
 cli: rsed
 
-rsed: $(SRC)
+rsed: $(SRC) regex.h
 	$(CC) $(CFLAGS) -D_GNU_SOURCE -DRX_MAIN $(SRC) -o $@
 
-# Build and run the in-file self-test harness.
-test: $(TESTS)/rxtest
-	./$(TESTS)/rxtest
+# Build and run the fast public-API self-test.
+test: $(TESTS)/selftest
+	./$(TESTS)/selftest
 
-$(TESTS)/rxtest: $(SRC)
-	$(CC) $(CFLAGS) -DRX_TEST $(SRC) -o $@
+$(TESTS)/selftest: $(TESTS)/selftest.c $(SRC) regex.h
+	$(CC) $(CFLAGS) $(TESTS)/selftest.c -o $@
 
 # A smaller per-search step budget keeps pathological fuzz patterns from
 # dominating the run time while still exercising the abort path.
@@ -35,18 +35,18 @@ TORTURE_SRC = $(TESTS)/torture.c
 torture: $(TESTS)/torturet
 	./$(TESTS)/torturet
 
-$(TESTS)/torturet: $(TORTURE_SRC) $(SRC)
+$(TESTS)/torturet: $(TORTURE_SRC) $(SRC) regex.h
 	$(CC) $(CFLAGS) $(TORTURE_CFLAGS) $(TORTURE_SRC) -o $@
 
 # Torture suite under AddressSanitizer (plus leak detection).
-asan: $(TORTURE_SRC) $(SRC)
+asan: $(TORTURE_SRC) $(SRC) regex.h
 	$(CC) -std=c99 -Wall -Wextra -g -O1 $(TORTURE_CFLAGS) \
 	    -fsanitize=address -fno-omit-frame-pointer $(TORTURE_SRC) \
 	    -o $(TESTS)/torture-asan
 	./$(TESTS)/torture-asan 5000
 
 # Torture suite under UndefinedBehaviorSanitizer.
-ubsan: $(TORTURE_SRC) $(SRC)
+ubsan: $(TORTURE_SRC) $(SRC) regex.h
 	$(CC) -std=c99 -Wall -Wextra -g -O1 $(TORTURE_CFLAGS) \
 	    -fsanitize=undefined -fno-sanitize-recover=all \
 	    -fno-omit-frame-pointer $(TORTURE_SRC) -o $(TESTS)/torture-ubsan
@@ -56,7 +56,7 @@ ubsan: $(TORTURE_SRC) $(SRC)
 # allocation in the engine is failed in turn; the leak detector proves
 # each error path releases its partial state. The "0" argument skips the
 # fuzzer so this target is just the sweep.
-fault: $(TORTURE_SRC) $(SRC)
+fault: $(TORTURE_SRC) $(SRC) regex.h
 	$(CC) -std=c99 -Wall -Wextra -g -O1 $(TORTURE_CFLAGS) \
 	    -fsanitize=address -fno-omit-frame-pointer $(TORTURE_SRC) \
 	    -o $(TESTS)/torture-fault
@@ -64,20 +64,20 @@ fault: $(TORTURE_SRC) $(SRC)
 
 # Allocation-failure sweep under valgrind memcheck, an independent check
 # on the error-path cleanup (uninstrumented build; the fuzzer is skipped).
-valgrind: $(TORTURE_SRC) $(SRC)
+valgrind: $(TORTURE_SRC) $(SRC) regex.h
 	$(CC) -std=c99 -Wall -Wextra -g -O1 $(TORTURE_CFLAGS) \
 	    $(TORTURE_SRC) -o $(TESTS)/torture-vg
 	$(VALGRIND) ./$(TESTS)/torture-vg 0
 
 # Line coverage of the engine from the torture suite. Built and run inside
 # tests/ so the coverage artifacts stay out of the top level.
-cov: $(TORTURE_SRC) $(SRC)
+cov: $(TORTURE_SRC) $(SRC) regex.h
 	cd $(TESTS) && $(CC) -std=c99 -O0 -g $(TORTURE_CFLAGS) --coverage \
 	    torture.c -o torture-cov && ./torture-cov && \
 	    gcov torture-cov-torture >/dev/null 2>&1 || true
 	@echo "see $(TESTS)/regex.c.gcov for per-line counts"
 
 clean:
-	rm -f rsed $(TESTS)/rxtest $(TESTS)/torturet $(TESTS)/torture-asan \
+	rm -f rsed $(TESTS)/selftest $(TESTS)/torturet $(TESTS)/torture-asan \
 	    $(TESTS)/torture-ubsan $(TESTS)/torture-fault $(TESTS)/torture-vg \
 	    $(TESTS)/torture-cov $(TESTS)/*.gcno $(TESTS)/*.gcda $(TESTS)/*.gcov

@@ -1,6 +1,6 @@
 # Build artifacts
 rsed
-tests/rxtest
+tests/selftest
 tests/torturet
 tests/torture-asan
 tests/torture-ubsan
