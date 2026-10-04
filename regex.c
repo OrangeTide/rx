@@ -105,6 +105,13 @@ char *rx_replace(rx_t *re, const char *text, size_t len, const char *repl,
 #define RX_STEP_LIMIT 20000000L
 #endif
 
+/* Largest repetition count accepted in a {n,m} interval, matching the
+ * POSIX RE_DUP_MAX minimum. Keeps a huge count from blowing up the
+ * compiled program. */
+#ifndef RX_DUP_MAX
+#define RX_DUP_MAX 32767
+#endif
+
 /****************************************************************
  * Instruction set for the backtracking virtual machine
  ****************************************************************/
@@ -123,6 +130,8 @@ enum {
     I_BREF,     /* match backreference to group x             */
     I_JMP,      /* jump to x                                  */
     I_SPLIT,    /* try x first, then y on failure             */
+    I_MARK,     /* record position in scratch slot x (no undo) */
+    I_PROGRESS, /* if position == scratch slot x, jump to y    */
     I_MATCH,    /* accept                                     */
 };
 
@@ -137,6 +146,7 @@ struct rx {
     rx_inst *prog;
     int plen;
     int ngroup;             /* number of capturing groups (0 == none) */
+    int nmark;              /* scratch slots for repetition guards    */
     int flags;
     unsigned char **sets;   /* owned class bitmaps, freed in rx_free  */
     int nsets;
@@ -418,6 +428,24 @@ rx_run(rx_ctx *c, int pc, long sp)
             pc = in->x;
             break;
 
+        case I_MARK:
+            /* Record the iteration-entry position. No undo entry: the
+             * slot is always re-marked before the matching I_PROGRESS
+             * reads it, so it never needs restoring on backtrack. */
+            if (in->x < c->nsav)
+                c->sav[in->x] = sp;
+            pc++;
+            break;
+
+        case I_PROGRESS:
+            /* A repetition body that consumed nothing: take the loop
+             * exit instead of looping forever. */
+            if (in->x < c->nsav && c->sav[in->x] == sp)
+                pc = in->y;
+            else
+                pc++;
+            break;
+
         case I_MATCH:
             return sp;
 
@@ -452,6 +480,7 @@ typedef struct {
     rx_inst *prog;
     int plen, pcap;
     int ngroup;
+    int nmark;              /* scratch slots allocated for repetition guards */
     int maxref;             /* highest backreference seen */
     int flags;
     const char *err;
@@ -547,6 +576,8 @@ take_tpl(comp *c, int from)
         } else if (t.in[i].op == I_SPLIT) {
             t.in[i].x -= from;
             t.in[i].y -= from;
+        } else if (t.in[i].op == I_PROGRESS) {
+            t.in[i].y -= from;      /* x is a scratch slot, not a target */
         }
     }
     c->plen = from;
@@ -575,6 +606,8 @@ put_tpl(comp *c, tpl t)
         } else if (in->op == I_SPLIT) {
             in->x += base;
             in->y += base;
+        } else if (in->op == I_PROGRESS) {
+            in->y += base;          /* x is a scratch slot, not a target */
         }
     }
 }
@@ -958,19 +991,37 @@ build_rep(comp *c, tpl t, int n, int m, int lazy)
         return;
 
     if (m < 0) {
-        /* trailing star: (t)* appended after the n mandatory copies */
+        /* Trailing star appended after the n mandatory copies:
+         *
+         *   L1: SPLIT body, end      (greedy; swapped when lazy)
+         *   body: MARK slot          record the iteration-entry position
+         *         <t>
+         *         PROGRESS slot, end  exit if the body consumed nothing
+         *         JMP L1
+         *   end:
+         *
+         * The MARK/PROGRESS pair stops a nullable body (such as a*) from
+         * looping forever with no progress. */
+        int slot = c->nmark++;
         int sp = emit(c, I_SPLIT);
-        int b, j, end;
+        int b, mk, pr, j, end;
 
         if (c->err)
             return;
         b = c->plen;
+        mk = emit(c, I_MARK);
+        if (c->err)
+            return;
+        c->prog[mk].x = slot;       /* rebased to a real slot after parse */
         put_tpl(c, t);
+        pr = emit(c, I_PROGRESS);
         j = emit(c, I_JMP);
         if (c->err)
             return;
         c->prog[j].x = sp;
         end = c->plen;
+        c->prog[pr].x = slot;
+        c->prog[pr].y = end;
         if (lazy) {
             c->prog[sp].x = end;
             c->prog[sp].y = b;
@@ -1062,7 +1113,8 @@ parse_quantifier(comp *c, int from)
         int lo = 0, hi, sawlo = 0;
 
         while (q < c->pend && isdigit((unsigned char)*q)) {
-            lo = lo * 10 + (*q - '0');
+            /* Saturate rather than overflow; the cap check below rejects. */
+            lo = lo > RX_DUP_MAX ? RX_DUP_MAX + 1 : lo * 10 + (*q - '0');
             sawlo = 1;
             q++;
         }
@@ -1071,7 +1123,7 @@ parse_quantifier(comp *c, int from)
             if (q < c->pend && isdigit((unsigned char)*q)) {
                 hi = 0;
                 while (q < c->pend && isdigit((unsigned char)*q)) {
-                    hi = hi * 10 + (*q - '0');
+                    hi = hi > RX_DUP_MAX ? RX_DUP_MAX + 1 : hi * 10 + (*q - '0');
                     q++;
                 }
             } else {
@@ -1090,6 +1142,10 @@ parse_quantifier(comp *c, int from)
             return;
         }
         q++;                    /* consume '}' */
+        if (lo > RX_DUP_MAX || hi > RX_DUP_MAX) {
+            c->err = "repetition count too large";
+            return;
+        }
         if (hi >= 0 && hi < lo) {
             c->err = "bad {n,m} interval";
             return;
@@ -1240,6 +1296,19 @@ rx_compile(const char *pattern, int flags, const char **errp)
     if (!c.err && c.maxref > c.ngroup)
         c.err = "backreference to undefined group";
 
+    /* Repetition-guard scratch slots are numbered from zero during the
+     * parse; place them above the capture slots now that the group count
+     * is final. */
+    if (!c.err && c.nmark > 0) {
+        int base = 2 * (c.ngroup + 1);
+        int i;
+
+        for (i = 0; i < c.plen; i++) {
+            if (c.prog[i].op == I_MARK || c.prog[i].op == I_PROGRESS)
+                c.prog[i].x += base;
+        }
+    }
+
     if (c.err) {
         int i;
 
@@ -1267,6 +1336,7 @@ rx_compile(const char *pattern, int flags, const char **errp)
     re->prog = c.prog;
     re->plen = c.plen;
     re->ngroup = c.ngroup;
+    re->nmark = c.nmark;
     re->flags = c.flags;
     re->sets = c.sets;
     re->nsets = c.nsets;
@@ -1306,7 +1376,7 @@ rx_exec(rx_t *re, const char *text, size_t len, size_t start,
 
     if (!re)
         return ERR;
-    nsav = 2 * (re->ngroup + 1);
+    nsav = 2 * (re->ngroup + 1) + re->nmark;    /* captures + scratch slots */
     sav = malloc((size_t)nsav * sizeof *sav);
     if (!sav)
         return ERR;

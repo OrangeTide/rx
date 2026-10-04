@@ -187,11 +187,12 @@ rx_free(re);
 
 ## Limitations
 
-- The matcher recurses while backtracking, so match depth grows with the
-  length of a greedily repeated span. This is fine for line-oriented
-  tools but is not suited to very long single matches.
 - A per-search instruction budget (`RX_STEP_LIMIT`) guards against
-  catastrophic backtracking. A search that exceeds it fails with an
-  error rather than hanging.
+  catastrophic backtracking. A pattern that nests quantifiers over a
+  nullable body, such as `(.*)*`, can still explore exponentially many
+  states; the budget bounds that to an error return rather than a hang,
+  but the pattern is better rewritten.
+- Repetition counts in `{n,m}` are capped at `RX_DUP_MAX` (32767,
+  matching the POSIX minimum). A larger count is a compile error.
 - Matching is byte-oriented, not UTF-8 aware. Multibyte characters are
   matched as individual bytes.

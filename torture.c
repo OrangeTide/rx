@@ -192,6 +192,27 @@ battery(void)
     ck_match("^(ab){2,3}$", "ababab", 0, 1);
     ck_match("^(ab){2,3}$", "abababab", 0, 0);
 
+    /* Nullable repetition must terminate and match, not loop (F1). */
+    ck_match("^(a*)*$", "aaa", 0, 1);
+    ck_group("^(a*)*$", "aaaaa", 0, 1, "");             /* last iter empty */
+    ck_match("^(a?)*$", "aaa", 0, 1);
+    ck_match("(a?)*b", "b", 0, 1);
+    ck_match("^(a*)+$", "aa", 0, 1);
+    ck_match("^()*$", "", 0, 1);
+    ck_match("(?:)*", "x", 0, 1);
+    ck_match("^(a|)*$", "aaa", 0, 1);                   /* nullable branch */
+    ck_match("^(|a)*$", "aaa", 0, 1);
+    ck_match("^(a*|b*)*$", "aabbb", 0, 1);
+    ck_match("x(.+)+y", "xabcy", 0, 1);                 /* progressing nest */
+
+    /* Repetition counts are bounded (F2): a huge or overflowing count is
+     * rejected rather than expanded or overflowed. */
+    ck_badpat("a{40000}");
+    ck_badpat("a{0,40000}");
+    ck_badpat("a{99999999999}");                        /* would overflow int */
+    ck_badpat("a{2,99999999999}");
+    ck_match("a{32767}", "a", 0, 0);                     /* at the cap: valid */
+
     /* Greedy vs lazy capture extent. */
     ck_group("a(.*)c", "axxcyyc", 0, 1, "xxcyy");       /* greedy */
     ck_group("a(.*?)c", "axxcyyc", 0, 1, "xx");         /* lazy    */
