@@ -255,6 +255,21 @@ battery(void)
     ck_match("\\<the\\>", "the end", 0, 1);
     ck_match("\\<the\\>", "theory", 0, 0);
 
+    /* Shorthand classes inside bracket expressions (F3): the whole
+     * membership joins the set, it is not read as a literal letter. */
+    ck_match("^[\\d]+$", "0123", 0, 1);
+    ck_match("[\\d]", "d", 0, 0);                        /* not literal 'd' */
+    ck_match("^[\\w]+$", "foo_1", 0, 1);
+    ck_match("[\\w]", "!", 0, 0);
+    ck_match("^[\\s]+$", " \t\n", 0, 1);
+    ck_match("[\\D]", "5", 0, 0);                        /* negated form */
+    ck_match("^[\\D]+$", "abc.", 0, 1);
+    ck_match("[\\W]", "_", 0, 0);
+    ck_match("[\\S]", " ", 0, 0);
+    ck_match("^[a\\d]+$", "a7a", 0, 1);                  /* mixed with literal */
+    ck_match("^[\\d\\s]+$", "1 2\t3", 0, 1);             /* two shorthands */
+    ck_match("^[x\\dy]+$", "x5y", 0, 1);                 /* shorthand mid-set */
+
     /* Anchors and multiline. */
     ck_match("^b", "a\nb", RX_MULTILINE, 1);
     ck_match("^b", "a\nb", 0, 0);
@@ -334,6 +349,32 @@ battery(void)
     ck_sub("x", "x", "\\n\\t\\r\\f\\v\\a\\\\", 0,       /* repl escapes */
            "\n\t\r\f\v\a\\");
     ck_sub("a", "a", "", 0, "");                        /* empty result */
+
+    /* Parser recursion is bounded (F4): a pattern nested past the depth
+     * limit is a clean compile error, not a stack overflow. A deep but
+     * legal nest still compiles. */
+    {
+        char deep[9000];
+        int i, n;
+
+        n = 0;
+        for (i = 0; i < 4000; i++)
+            deep[n++] = '(';
+        deep[n++] = 'a';
+        for (i = 0; i < 4000; i++)
+            deep[n++] = ')';
+        deep[n] = '\0';
+        ck_badpat(deep);
+
+        n = 0;
+        for (i = 0; i < 500; i++)
+            deep[n++] = '(';
+        deep[n++] = 'a';
+        for (i = 0; i < 500; i++)
+            deep[n++] = ')';
+        deep[n] = '\0';
+        ck_match(deep, "a", 0, 1);                      /* legal deep nest */
+    }
 }
 
 /****************************************************************

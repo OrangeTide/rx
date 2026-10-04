@@ -63,7 +63,7 @@ The base is POSIX ERE. A backslash makes a metacharacter literal.
 | `*` `+` `?` | greedy quantifiers |
 | `*?` `+?` `??` | lazy (non-greedy) quantifiers |
 | `{n}` `{n,}` `{n,m}` `{,m}` | counted repetition (lazy variants with trailing `?`) |
-| `[...]` `[^...]` | bracket expression, with ranges and `[:class:]` |
+| `[...]` `[^...]` | bracket expression, with ranges, `[:class:]`, and `\d \w \s` shorthands |
 | `^` `$` | anchors (line anchors under `RX_MULTILINE`) |
 | `(...)` `(?:...)` | capturing and non-capturing groups |
 | `\|` | alternation |
@@ -194,5 +194,8 @@ rx_free(re);
   but the pattern is better rewritten.
 - Repetition counts in `{n,m}` are capped at `RX_DUP_MAX` (32767,
   matching the POSIX minimum). A larger count is a compile error.
+- Group nesting is capped at `RX_MAX_DEPTH` (1000). The parser recurses
+  on the C stack per nested group, so a deeper pattern is a compile error
+  rather than a stack overflow.
 - Matching is byte-oriented, not UTF-8 aware. Multibyte characters are
   matched as individual bytes.

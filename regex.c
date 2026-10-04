@@ -112,6 +112,13 @@ char *rx_replace(rx_t *re, const char *text, size_t len, const char *repl,
 #define RX_DUP_MAX 32767
 #endif
 
+/* Largest group-nesting depth the recursive-descent parser accepts. The
+ * parser recurses on the C stack for each nested group, so this bounds
+ * that recursion to a compile error rather than a stack overflow. */
+#ifndef RX_MAX_DEPTH
+#define RX_MAX_DEPTH 1000
+#endif
+
 /****************************************************************
  * Instruction set for the backtracking virtual machine
  ****************************************************************/
@@ -482,6 +489,7 @@ typedef struct {
     int ngroup;
     int nmark;              /* scratch slots allocated for repetition guards */
     int maxref;             /* highest backreference seen */
+    int depth;              /* current group-nesting depth */
     int flags;
     const char *err;
     unsigned char **sets;
@@ -671,15 +679,13 @@ read_escape_char(comp *c)
     }
 }
 
-/* Fill a fresh class set for a Perl-style shorthand letter. */
-static unsigned char *
-shorthand_set(comp *c, int letter)
+/* Fill `set` (expected zeroed) with the members of a Perl-style shorthand
+ * letter, inverting for the upper-case (negated) forms. */
+static void
+fill_shorthand(unsigned char *set, int letter)
 {
-    unsigned char *set = new_set(c);
     int negate = 0;
 
-    if (!set)
-        return NULL;
     switch (letter) {
     case 'D': negate = 1; /* fall through */
     case 'd':
@@ -704,6 +710,17 @@ shorthand_set(comp *c, int letter)
     }
     if (negate)
         invert_set(set);
+}
+
+/* Fill a fresh class set for a Perl-style shorthand letter. */
+static unsigned char *
+shorthand_set(comp *c, int letter)
+{
+    unsigned char *set = new_set(c);
+
+    if (!set)
+        return NULL;
+    fill_shorthand(set, letter);
     return set;
 }
 
@@ -791,6 +808,21 @@ parse_class(comp *c)
             c->p += 2;
             if (add_posix_class(c, set) != OK)
                 return;
+            continue;
+        }
+
+        /* A shorthand class (\d \D \w \W \s \S) contributes its whole
+         * membership to the bracket set rather than a single byte. */
+        if (*c->p == '\\' && c->p + 1 < c->pend &&
+            strchr("dDwWsS", (unsigned char)c->p[1])) {
+            unsigned char tmp[32];
+            int i;
+
+            memset(tmp, 0, sizeof tmp);
+            fill_shorthand(tmp, (unsigned char)c->p[1]);
+            for (i = 0; i < 32; i++)
+                set[i] |= tmp[i];
+            c->p += 2;
             continue;
         }
 
@@ -918,6 +950,10 @@ parse_atom(comp *c)
             c->p += 2;
             capturing = 0;
         }
+        if (++c->depth > RX_MAX_DEPTH) {
+            c->err = "pattern nested too deeply";
+            return;
+        }
         if (capturing) {
             g = ++c->ngroup;
             {
@@ -927,6 +963,7 @@ parse_atom(comp *c)
             }
         }
         parse_alt(c);
+        c->depth--;
         if (c->err)
             return;
         if (c->p >= c->pend || *c->p != ')') {
