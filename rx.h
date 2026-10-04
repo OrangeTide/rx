@@ -7,6 +7,16 @@
 
 #include <stddef.h>     /* size_t */
 
+/* Library version. RX_VERSION is a single integer for comparisons, for
+ * example: #if RX_VERSION >= RX_VERSION_MAKE(1, 2, 0) */
+#define RX_VERSION_MAJOR 1
+#define RX_VERSION_MINOR 0
+#define RX_VERSION_PATCH 0
+#define RX_VERSION_STRING "1.0.0"
+#define RX_VERSION_MAKE(maj, min, pat) ((maj) * 10000 + (min) * 100 + (pat))
+#define RX_VERSION \
+    RX_VERSION_MAKE(RX_VERSION_MAJOR, RX_VERSION_MINOR, RX_VERSION_PATCH)
+
 /* Compile and match flags. The match flags (bits 0..2) are stored in the
  * compiled object; RX_GLOBAL only affects rx_replace. */
 #define RX_ICASE     0x01   /* case-insensitive matching           */

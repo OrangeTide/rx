@@ -167,6 +167,9 @@ printf 'a   b\t c\n' | ./rsed -g '\s+' ' '
 ## C API
 
 ```c
+#define RX_VERSION_STRING "1.0.0"   /* also RX_VERSION_MAJOR/MINOR/PATCH */
+#define RX_VERSION ...              /* integer; compare via RX_VERSION_MAKE */
+
 #define RX_ICASE     0x01
 #define RX_MULTILINE 0x02
 #define RX_DOTALL    0x04
