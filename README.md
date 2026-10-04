@@ -27,6 +27,7 @@ make torture   # heavy hand-verified battery, fault sweep, and fuzzer
 make asan      # torture suite under AddressSanitizer + leak detection
 make ubsan     # torture suite under UndefinedBehaviorSanitizer
 make fault     # allocation-failure sweep under ASan (fuzzer skipped)
+make valgrind  # the same sweep under valgrind memcheck
 make cov       # line coverage; writes regex.c.gcov
 ```
 
@@ -39,7 +40,8 @@ fails the Nth allocation in turn. For each operation it first counts the
 allocations, then re-runs it once per allocation, failing exactly one and
 asserting the documented failure value is returned. Run under
 AddressSanitizer, the leak detector confirms every error path releases
-its partial state.
+its partial state; `make valgrind` re-runs the sweep under valgrind
+memcheck as an independent check.
 
 The suites pass clean under ASan and UBSan with no leaks or undefined
 behavior. Coverage of `regex.c` is about 97%; the remainder is a handful

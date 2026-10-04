@@ -5,6 +5,7 @@ torturet
 torture-asan
 torture-ubsan
 torture-fault
+torture-vg
 torture-cov
 
 # Coverage data

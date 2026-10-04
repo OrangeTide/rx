@@ -2,7 +2,10 @@ CC      ?= cc
 CFLAGS  ?= -std=c99 -Wall -Wextra -O2
 SRC      = regex.c
 
-.PHONY: all test cli torture asan ubsan fault cov clean
+.PHONY: all test cli torture asan ubsan fault valgrind cov clean
+
+VALGRIND ?= valgrind --leak-check=full --show-leak-kinds=all \
+    --errors-for-leak-kinds=all --error-exitcode=1 -q
 
 all: cli
 
@@ -53,6 +56,12 @@ fault: torture.c $(SRC)
 	    -fsanitize=address -fno-omit-frame-pointer torture.c -o torture-fault
 	./torture-fault 0
 
+# Allocation-failure sweep under valgrind memcheck, an independent check
+# on the error-path cleanup (uninstrumented build; the fuzzer is skipped).
+valgrind: torture.c $(SRC)
+	$(CC) -std=c99 -Wall -Wextra -g -O1 $(TORTURE_CFLAGS) torture.c -o torture-vg
+	$(VALGRIND) ./torture-vg 0
+
 # Line coverage of the engine from the torture suite.
 cov: torture.c $(SRC)
 	$(CC) -std=c99 -O0 -g $(TORTURE_CFLAGS) --coverage torture.c -o torture-cov
@@ -62,4 +71,4 @@ cov: torture.c $(SRC)
 
 clean:
 	rm -f rsed rxtest torturet torture-asan torture-ubsan torture-fault \
-	    torture-cov *.gcno *.gcda *.gcov
+	    torture-vg torture-cov *.gcno *.gcda *.gcov
