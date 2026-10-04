@@ -348,6 +348,11 @@ battery(void)
     ck_sub("(\\w+)", "HELLO", "\\L\\1", 0, "hello");    /* \\L sticky */
     ck_sub("x", "x", "\\n\\t\\r\\f\\v\\a\\\\", 0,       /* repl escapes */
            "\n\t\r\f\v\a\\");
+    ck_sub("x", "x", "\\x41\\x42", 0, "AB");            /* hex escape */
+    ck_sub("x", "x", "\\x6a", 0, "j");                  /* lowercase hex */
+    ck_sub("x", "x", "\\x4", 0, "\x04");                /* one hex digit */
+    ck_sub("x", "x", "\\xg", 0, "xg");                  /* lone \\x literal */
+    ck_sub("x", "x", "\\x", 0, "x");                    /* trailing \\x */
     ck_sub("a", "a", "", 0, "");                        /* empty result */
 
     /* Parser recursion is bounded (F4): a pattern nested past the depth

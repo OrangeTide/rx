@@ -1590,6 +1590,22 @@ expand(sbuf *out, const char *repl, const char *text, rx_match *m, int ng)
         case 'f': sb_putc(out, '\f'); break;
         case 'v': sb_putc(out, '\v'); break;
         case 'a': sb_putc(out, '\a'); break;
+        case 'x': {
+            int h1, h2, v;
+
+            if ((h1 = hexval((unsigned char)r[1])) < 0) {
+                put_cased(out, &cs, 'x');   /* lone \x is literal x */
+                break;
+            }
+            r++;                            /* consume first hex digit */
+            v = h1;
+            if ((h2 = hexval((unsigned char)r[1])) >= 0) {
+                r++;                        /* consume second hex digit */
+                v = v * 16 + h2;
+            }
+            sb_putc(out, v);
+            break;
+        }
         case 'U': cs.mode = 'U'; break;
         case 'L': cs.mode = 'L'; break;
         case 'E': cs.mode = 0; cs.once = 0; break;
