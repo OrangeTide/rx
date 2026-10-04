@@ -1,7 +1,7 @@
-/* torture.c : heavy correctness and robustness tests for regex.c */
+/* torture.c : heavy correctness and robustness tests for rx.c */
 /*
  * Build via the Makefile `torture` / `asan` / `ubsan` / `cov` targets.
- * Includes regex.c directly so coverage and the sanitizers see the whole
+ * Includes rx.c directly so coverage and the sanitizers see the whole
  * engine as one translation unit.
  */
 
@@ -14,11 +14,11 @@
 #include <stddef.h>
 
 /*
- * Fault injection. Every allocation inside regex.c is routed through a
+ * Fault injection. Every allocation inside rx.c is routed through a
  * hook that can fail the Nth allocation on demand. The hook is disarmed
  * by default, so it is a zero-cost passthrough until a sweep arms it.
  * The system headers are all included above first, so the macros below
- * only ever rewrite allocation calls in regex.c's own code, never a
+ * only ever rewrite allocation calls in rx.c's own code, never a
  * header declaration. free() is left alone.
  */
 static long rx_fi_count;    /* allocations seen while armed */
@@ -56,7 +56,7 @@ rx_fi_calloc(size_t a, size_t b)
 #define realloc rx_fi_realloc
 #define calloc  rx_fi_calloc
 
-#include "../regex.c"
+#include "../rx.c"
 
 static int tests, fails;
 

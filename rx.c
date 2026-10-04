@@ -1,4 +1,4 @@
-/* regex.c : compact POSIX-ERE regex engine with convenience extensions
+/* rx.c : compact POSIX-ERE regex engine with convenience extensions
  * SPDX-License-Identifier: 0BSD OR CC0-1.0
  */
 /*
@@ -44,7 +44,7 @@
  * catastrophic backtracking by failing the search rather than hanging.
  */
 
-#include "regex.h"
+#include "rx.h"
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -1641,7 +1641,7 @@ rx_replace(rx_t *re, const char *text, size_t len, const char *repl,
 }
 
 /****************************************************************
- * Optional sed-like CLI: cc -DRX_MAIN regex.c -o rsed
+ * Optional sed-like CLI: cc -DRX_MAIN rx.c -o rsed
  *   rsed [-g] [-i] [-m] [-s] PATTERN REPLACEMENT < input
  ****************************************************************/
 

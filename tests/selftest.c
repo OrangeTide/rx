@@ -1,9 +1,9 @@
 /* selftest.c : fast public-API smoke test for the regex engine */
 /*
  * Exercises the engine through its public interface only. Build and run
- * via the Makefile `test` target. It includes ../regex.c directly for a
- * one-command build, but since it touches nothing beyond regex.h it
- * could equally link against a separately compiled regex.o.
+ * via the Makefile `test` target. It includes ../rx.c directly for a
+ * one-command build, but since it touches nothing beyond rx.h it could
+ * equally link against a separately compiled rx.o.
  */
 
 #include <stdio.h>
@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#include "../regex.c"
+#include "../rx.c"
 
 static int tests, fails;
 

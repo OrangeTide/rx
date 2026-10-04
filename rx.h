@@ -1,9 +1,9 @@
-/* regex.h : public interface for the compact regex engine
+/* rx.h : public interface for the compact regex engine
  * SPDX-License-Identifier: 0BSD OR CC0-1.0
  */
 
-#ifndef REGEX_H
-#define REGEX_H
+#ifndef RX_H
+#define RX_H
 
 #include <stddef.h>     /* size_t */
 
@@ -46,4 +46,4 @@ int rx_exec(rx_t *re, const char *text, size_t len, size_t start,
 char *rx_replace(rx_t *re, const char *text, size_t len, const char *repl,
                  int flags);
 
-#endif /* REGEX_H */
+#endif /* RX_H */

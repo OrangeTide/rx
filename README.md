@@ -6,8 +6,8 @@ backtracking matcher, so it supports backreferences and the common
 conveniences found in GNU sed, Vim, and PCRE on top of the POSIX ERE
 core.
 
-The engine is two files: `regex.c` and `regex.h`. Drop both into a
-project and you have a working regex library. `regex.c` also carries a
+The engine is two files: `rx.c` and `rx.h`. Drop both into a
+project and you have a working regex library. `rx.c` also carries a
 sed-like command-line tool behind the `RX_MAIN` compile flag. The tests
 live under `tests/`.
 
@@ -33,11 +33,11 @@ make asan      # torture suite under AddressSanitizer + leak detection
 make ubsan     # torture suite under UndefinedBehaviorSanitizer
 make fault     # allocation-failure sweep under ASan (fuzzer skipped)
 make valgrind  # the same sweep under valgrind memcheck
-make cov       # line coverage; writes tests/regex.c.gcov
+make cov       # line coverage; writes tests/rx.c.gcov
 ```
 
 The test sources live under `tests/`. `tests/torture.c` includes
-`regex.c` directly so the sanitizers and `gcov` see the whole engine as
+`rx.c` directly so the sanitizers and `gcov` see the whole engine as
 one translation unit. The torture target takes an optional iteration
 count, for example `./tests/torturet 100000`.
 
@@ -50,23 +50,24 @@ its partial state; `make valgrind` re-runs the sweep under valgrind
 memcheck as an independent check.
 
 The suites pass clean under ASan and UBSan with no leaks or undefined
-behavior. Coverage of `regex.c` is about 97%; the remainder is a handful
+behavior. Coverage of `rx.c` is about 97%; the remainder is a handful
 of defensively-unreachable branches and allocation-failure paths that are
 only reachable at a specific reallocation boundary.
 
-To embed the engine in another program, copy `regex.c` and `regex.h`
-into your source tree, include `regex.h` where you call the API, and
-compile `regex.c` as an ordinary translation unit (with `RX_MAIN`
+To embed the engine in another program, copy `rx.c` and `rx.h`
+into your source tree, include `rx.h` where you call the API, and
+compile `rx.c` as an ordinary translation unit (with `RX_MAIN`
 undefined). For example:
 
 ```sh
-cc -c regex.c -o regex.o
-cc yourprog.c regex.o -o yourprog
+cc -c rx.c -o rx.o
+cc yourprog.c rx.o -o yourprog
 ```
 
-`regex.h` is the whole public interface. A few compile-time limits can
-be overridden with `-D` when building `regex.c`: `RX_STEP_LIMIT`,
-`RX_DUP_MAX`, and `RX_MAX_DEPTH`.
+`rx.h` is the whole public interface. The files are named `rx.*` rather
+than `regex.*` so the header does not clash with the POSIX `<regex.h>`.
+A few compile-time limits can be overridden with `-D` when building
+`rx.c`: `RX_STEP_LIMIT`, `RX_DUP_MAX`, and `RX_MAX_DEPTH`.
 
 ## Pattern syntax
 
