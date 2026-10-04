@@ -41,3 +41,19 @@ jobs:
 
       - name: Valgrind sweep
         run: make valgrind
+
+  # Stable name to mark as the required status check. It passes only when
+  # every matrix job did, so the required check never drifts as the matrix
+  # changes.
+  ci-ok:
+    if: always()
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the test matrix to have succeeded
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "test matrix result: ${{ needs.test.result }}"
+            exit 1
+          fi
+          echo "all test jobs passed"
