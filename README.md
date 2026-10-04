@@ -156,6 +156,9 @@ printf 'a   b\t c\n' | ./rsed -g '\s+' ' '
 #define RX_DOTALL    0x04
 #define RX_GLOBAL    0x08
 
+#define RX_BACKWARD  0x10   /* rx_search: search toward the start */
+#define RX_WRAP      0x20   /* rx_search: wrap past the far end    */
+
 typedef struct rx rx_t;
 
 typedef struct {
@@ -168,6 +171,9 @@ void  rx_free(rx_t *re);
 int   rx_ngroups(const rx_t *re);
 int   rx_exec(rx_t *re, const char *text, size_t len, size_t start,
               rx_match *m, int nmatch);
+int   rx_matches_newline(const rx_t *re);
+int   rx_search(rx_t *re, const char *text, size_t len, size_t from,
+                int sflags, rx_match *m, int nmatch);
 char *rx_replace(rx_t *re, const char *text, size_t len,
                  const char *repl, int flags);
 ```
@@ -176,6 +182,35 @@ char *rx_replace(rx_t *re, const char *text, size_t len,
 Entry 0 of `m` is the whole match; entries 1..`rx_ngroups` are the
 captured groups. `rx_replace` returns a freshly allocated,
 NUL-terminated string that the caller frees.
+
+## Editor integration
+
+Two entry points help a text editor use the engine for search and
+syntax highlighting.
+
+`rx_matches_newline` reports whether a match of the compiled pattern can
+contain a newline. When it returns 0, every possible match lies within a
+single line, so the caller can take a fast path and run the matcher one
+line at a time (for example, highlighting only the visible lines)
+without missing a match. When it returns 1, because the pattern uses
+`RX_DOTALL`, a literal newline, or a class that admits one, the caller
+must search the whole buffer.
+
+`rx_search` is a convenience over `rx_exec` for incremental,
+type-as-you-go search. By default it finds the first match beginning at
+or after `from`. With `RX_BACKWARD` it finds the last match beginning
+before `from`. With `RX_WRAP` a miss continues from the far end so the
+whole buffer is covered. The `m`, `nmatch`, and 1/0/-1 return are the
+same as `rx_exec`. A typical loop recompiles the pattern on each
+keystroke and calls `rx_search` from the point where the search began:
+
+```c
+rx_match m[1];
+int hit = rx_search(re, buf, buflen, cursor,
+                    backward ? RX_BACKWARD | RX_WRAP : RX_WRAP, m, 1);
+if (hit == 1)
+    highlight(m[0].so, m[0].eo);
+```
 
 Example:
 

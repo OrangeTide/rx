@@ -487,11 +487,115 @@ api_edge(void)
     tests++;
     if (rx_ngroups(NULL) != 0 ||
         rx_exec(NULL, "x", 1, 0, NULL, 0) != -1 ||
-        rx_replace(NULL, "x", 1, "y", 0) != NULL) {
+        rx_replace(NULL, "x", 1, "y", 0) != NULL ||
+        rx_matches_newline(NULL) != 0 ||
+        rx_search(NULL, "x", 1, 0, 0, NULL, 0) != -1) {
         fails++;
         printf("FAIL NULL-safe entry points\n");
     }
     rx_free(NULL);      /* must be a no-op */
+}
+
+/* Editor-oriented helpers: newline-span query and directional search. */
+static void
+ck_nl(const char *pat, int flags, int want)
+{
+    const char *err;
+    rx_t *re = rx_compile(pat, flags, &err);
+
+    tests++;
+    if (!re || rx_matches_newline(re) != want) {
+        fails++;
+        printf("FAIL matches_newline /%s/: want %d\n", pat, want);
+    }
+    rx_free(re);
+}
+
+/* Assert a search finds a match starting at `wso` (or no match if wso<0). */
+static void
+ck_search(const char *pat, const char *s, size_t from, int sflags, long wso)
+{
+    const char *err;
+    rx_t *re = rx_compile(pat, 0, &err);
+    rx_match m[1];
+    int r;
+
+    tests++;
+    if (!re) {
+        fails++;
+        printf("FAIL compile /%s/: %s\n", pat, err);
+        return;
+    }
+    r = rx_search(re, s, strlen(s), from, sflags, m, 1);
+    if (wso < 0) {
+        if (r != 0) {
+            fails++;
+            printf("FAIL search /%s/ from %zu sf=%#x: want miss, got %d\n",
+                   pat, from, sflags, r);
+        }
+    } else if (r != 1 || m[0].so != wso) {
+        fails++;
+        printf("FAIL search /%s/ from %zu sf=%#x: want so=%ld, got r=%d so=%ld\n",
+               pat, from, sflags, wso, r, r == 1 ? m[0].so : -1);
+    }
+    rx_free(re);
+}
+
+static void
+editor_api(void)
+{
+    /* A match is single-line unless it can contain a newline byte. */
+    ck_nl("abc", 0, 0);
+    ck_nl("a.c", 0, 0);                 /* dot excludes newline       */
+    ck_nl("a.c", RX_DOTALL, 1);         /* unless DOTALL              */
+    ck_nl("x\\ny", 0, 1);               /* literal newline            */
+    ck_nl("[\\n]", 0, 1);
+    ck_nl("\\s", 0, 1);                 /* shorthand includes newline */
+    ck_nl("\\d", 0, 0);
+    ck_nl("[^a]", 0, 1);                /* negated class includes it  */
+    ck_nl("^foo$", RX_MULTILINE, 0);    /* anchors are zero-width     */
+    ck_nl("(a)b\\1", 0, 0);             /* backref of a newline-free group */
+    ck_nl("(\\n)\\1", 0, 1);
+
+    /* Forward, backward, and wrap-around on three matches at 0, 8, 16. */
+    {
+        const char *t = "foo bar foo baz foo";
+
+        ck_search("foo", t, 0, 0, 0);
+        ck_search("foo", t, 1, 0, 8);
+        ck_search("foo", t, 9, 0, 16);
+        ck_search("foo", t, 17, 0, -1);              /* nothing after */
+        ck_search("foo", t, 17, RX_WRAP, 0);         /* wraps to top  */
+        ck_search("foo", t, 10, RX_BACKWARD, 8);     /* last before 10 */
+        ck_search("foo", t, 8, RX_BACKWARD, 0);      /* strictly before */
+        ck_search("foo", t, 0, RX_BACKWARD, -1);     /* nothing before */
+        ck_search("foo", t, 0, RX_BACKWARD | RX_WRAP, 16); /* wraps to last */
+        ck_search("zzz", t, 0, RX_WRAP, -1);         /* no match anywhere */
+    }
+
+    /* A matcher error (step budget) during a backward search propagates
+     * as -1 rather than being mistaken for "no match". */
+    {
+        const char *err;
+        char bad[64];
+        int i;
+        rx_t *re;
+        rx_match m[1];
+
+        for (i = 0; i < 40; i++)
+            bad[i] = 'a';
+        bad[40] = 'X';
+        bad[41] = '\0';
+        re = rx_compile("(a+)+$", 0, &err);
+        tests++;
+        if (!re ||
+            rx_search(re, bad, strlen(bad), strlen(bad),
+                      RX_BACKWARD, m, 1) != -1) {
+            fails++;
+            printf("FAIL backward search error propagation\n");
+        }
+        rx_free(re);
+    }
 }
 
 /****************************************************************
@@ -771,6 +875,7 @@ main(int argc, char **argv)
     battery();
     robustness();
     api_edge();
+    editor_api();
     fault_suite();
     fuzz(iters);        /* iters == 0 skips the fuzzer */
 

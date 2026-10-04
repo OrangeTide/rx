@@ -14,6 +14,11 @@
 #define RX_DOTALL    0x04   /* . also matches newline               */
 #define RX_GLOBAL    0x08   /* rx_replace: replace every match      */
 
+/* Search flags for rx_search. These occupy a separate bit range from the
+ * compile flags above and are passed only to rx_search. */
+#define RX_BACKWARD  0x10   /* search toward the start of the text  */
+#define RX_WRAP      0x20   /* wrap past the far end on a miss       */
+
 typedef struct rx rx_t;
 
 /* Offsets of a capture into the subject text, or -1/-1 when unset.
@@ -38,6 +43,23 @@ int rx_ngroups(const rx_t *re);
  * or -1 on error (such as the step budget being exceeded). */
 int rx_exec(rx_t *re, const char *text, size_t len, size_t start,
             rx_match *m, int nmatch);
+
+/* Report whether a match of `re` can contain a newline byte. Returns 0
+ * when every possible match lies within a single line, which lets an
+ * editor safely search and highlight one line at a time; returns 1 when
+ * a match may span lines, so the whole buffer must be searched at once. */
+int rx_matches_newline(const rx_t *re);
+
+/* Editor-oriented search, convenient for incremental (type-as-you-go)
+ * search. By default it finds the first match beginning at or after
+ * `from`; with RX_BACKWARD it finds the last match beginning before
+ * `from`. With RX_WRAP a miss continues from the far end of the text so
+ * the whole buffer is covered, as in an editor's search. `m`, `nmatch`,
+ * and the 1/0/-1 return value are exactly as for rx_exec. Backward
+ * search considers non-overlapping matches and costs a scan of the
+ * searched span. */
+int rx_search(rx_t *re, const char *text, size_t len, size_t from,
+              int sflags, rx_match *m, int nmatch);
 
 /* Substitute matches of `re` in `text` using the `repl` template and
  * return a freshly malloc'd NUL-terminated string the caller frees.

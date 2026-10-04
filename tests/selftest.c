@@ -155,6 +155,38 @@ main(void)
     expect_sub("a*", "aa", "-", RX_GLOBAL, "-");
     expect_sub("a*", "aba", "-", RX_GLOBAL, "-b-");
 
+    /* Editor helpers: newline-span query and directional search. */
+    {
+        const char *err;
+        rx_t *re;
+        rx_match m[1];
+        const char *t = "foo bar foo";    /* matches at 0 and 8 */
+
+        re = rx_compile("a.c", 0, &err);
+        tests++;
+        if (!re || rx_matches_newline(re) != 0)
+            fails++, printf("FAIL matches_newline single-line\n");
+        rx_free(re);
+
+        re = rx_compile("a.c", RX_DOTALL, &err);
+        tests++;
+        if (!re || rx_matches_newline(re) != 1)
+            fails++, printf("FAIL matches_newline dotall\n");
+        rx_free(re);
+
+        re = rx_compile("foo", 0, &err);
+        tests++;
+        if (!re ||
+            rx_search(re, t, strlen(t), 1, 0, m, 1) != 1 || m[0].so != 8 ||
+            rx_search(re, t, strlen(t), 9, 0, m, 1) != 0 ||
+            rx_search(re, t, strlen(t), 9, RX_WRAP, m, 1) != 1 ||
+            m[0].so != 0 ||
+            rx_search(re, t, strlen(t), 8, RX_BACKWARD, m, 1) != 1 ||
+            m[0].so != 0)
+            fails++, printf("FAIL rx_search directions\n");
+        rx_free(re);
+    }
+
     printf("%d tests, %d failures\n", tests, fails);
     return fails ? 1 : 0;
 }

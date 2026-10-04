@@ -111,6 +111,7 @@ struct rx {
     int ngroup;             /* number of capturing groups (0 == none) */
     int nmark;              /* scratch slots for repetition guards    */
     int flags;
+    int matches_nl;         /* 1 if a match can contain a newline byte */
     unsigned char **sets;   /* owned class bitmaps, freed in rx_free  */
     int nsets;
 };
@@ -1333,6 +1334,28 @@ rx_compile(const char *pattern, int flags, const char **errp)
     re->flags = c.flags;
     re->sets = c.sets;
     re->nsets = c.nsets;
+
+    /* Decide once whether any match can contain a newline. A backreference
+     * can only reproduce bytes some other instruction already matched, so
+     * scanning the literal, any, and class instructions covers it. This
+     * mirrors the matcher: I_ANY eats a newline only under RX_DOTALL, and
+     * a class set already has case folding and negation baked in. */
+    {
+        int i;
+
+        re->matches_nl = 0;
+        for (i = 0; i < re->plen; i++) {
+            rx_inst *in = &re->prog[i];
+
+            if ((in->op == I_CHAR && in->c == '\n') ||
+                (in->op == I_ANY && (re->flags & RX_DOTALL)) ||
+                (in->op == I_CLASS && get_bit(in->set, '\n'))) {
+                re->matches_nl = 1;
+                break;
+            }
+        }
+    }
+
     if (errp)
         *errp = NULL;
     return re;
@@ -1421,6 +1444,70 @@ rx_exec(rx_t *re, const char *text, size_t len, size_t start,
     free(ctx.ul);
     free(sav);
     return 0;
+}
+
+int
+rx_matches_newline(const rx_t *re)
+{
+    return re ? re->matches_nl : 0;
+}
+
+/* Find the start offset of the last non-overlapping match that begins
+ * strictly before `limit`, or -1 if there is none. Returns -2 on a
+ * matcher error so the caller can propagate it. */
+static long
+last_start_before(rx_t *re, const char *text, size_t len, long limit)
+{
+    long pos = 0;
+    long best = -1;
+    rx_match m0;
+
+    while (pos <= (long)len) {
+        int r = rx_exec(re, text, len, (size_t)pos, &m0, 1);
+
+        if (r < 0)
+            return -2;
+        if (r == 0 || m0.so >= limit)
+            break;
+        best = m0.so;
+        pos = m0.eo > m0.so ? m0.eo : m0.so + 1;
+    }
+    return best;
+}
+
+int
+rx_search(rx_t *re, const char *text, size_t len, size_t from,
+          int sflags, rx_match *m, int nmatch)
+{
+    if (!re)
+        return ERR;
+
+    if (!(sflags & RX_BACKWARD)) {
+        int r = rx_exec(re, text, len, from, m, nmatch);
+
+        if (r != 0)                 /* a hit, or an error: done */
+            return r;
+        if ((sflags & RX_WRAP) && from > 0)
+            return rx_exec(re, text, len, 0, m, nmatch);
+        return 0;
+    }
+
+    /* Backward: the last match beginning before `from`. With wrap, fall
+     * back to the last match anywhere, which is the one reached by
+     * continuing past the top of the buffer. */
+    {
+        long start = last_start_before(re, text, len, (long)from);
+
+        if (start == -2)
+            return ERR;
+        if (start < 0 && (sflags & RX_WRAP))
+            start = last_start_before(re, text, len, (long)len + 1);
+        if (start == -2)
+            return ERR;
+        if (start < 0)
+            return 0;
+        return rx_exec(re, text, len, (size_t)start, m, nmatch);
+    }
 }
 
 /****************************************************************
