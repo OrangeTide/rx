@@ -1,5 +1,7 @@
 # regex
 
+[![CI](https://github.com/OrangeTide/rx/actions/workflows/ci.yml/badge.svg)](https://github.com/OrangeTide/rx/actions/workflows/ci.yml)
+
 A compact regular expression engine in C, meant to be dropped into a
 small text tool such as a sed, a vi clone, or a grep. It is a
 backtracking matcher, so it supports backreferences and the common
