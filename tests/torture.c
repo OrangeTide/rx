@@ -3,6 +3,10 @@
  * Build via the Makefile `torture` / `asan` / `ubsan` / `cov` targets.
  * Includes rx.c directly so coverage and the sanitizers see the whole
  * engine as one translation unit.
+ *
+ * The tests are small single-concern functions. Each section driver
+ * (battery, robustness, editor_api, api_edge, fault_suite) is just a
+ * list of those functions, and main() runs the drivers in order.
  */
 
 #include <stdio.h>
@@ -64,6 +68,7 @@ static int tests, fails;
  * Assertion helpers
  ****************************************************************/
 
+/* Compile and search `s`; assert the 1/0/-1 result equals `want`. */
 static void
 ck_match(const char *pat, const char *s, int flags, int want)
 {
@@ -142,6 +147,7 @@ ck_group(const char *pat, const char *s, int flags, int g,
     rx_free(re);
 }
 
+/* Compile and replace; assert the result string equals `want`. */
 static void
 ck_sub(const char *pat, const char *s, const char *repl, int flags,
        const char *want)
@@ -166,337 +172,7 @@ ck_sub(const char *pat, const char *s, const char *repl, int flags,
     free(got);
 }
 
-/****************************************************************
- * Hand-verified battery
- ****************************************************************/
-
-static void
-battery(void)
-{
-    /* Empty and degenerate patterns. */
-    ck_match("", "", 0, 1);
-    ck_match("", "abc", 0, 1);
-    ck_match("^$", "", 0, 1);
-    ck_match("^$", "x", 0, 0);
-    ck_match("()", "x", 0, 1);
-    ck_match("(?:)", "x", 0, 1);
-    ck_match("a{0}", "b", 0, 1);        /* matches empty */
-    ck_match("a{0,0}b", "b", 0, 1);
-
-    /* Quantifier boundaries. */
-    ck_match("^a{2,4}$", "a", 0, 0);
-    ck_match("^a{2,4}$", "aa", 0, 1);
-    ck_match("^a{2,4}$", "aaaa", 0, 1);
-    ck_match("^a{2,4}$", "aaaaa", 0, 0);
-    ck_match("^a{3}$", "aaa", 0, 1);
-    ck_match("^(ab){2,3}$", "ababab", 0, 1);
-    ck_match("^(ab){2,3}$", "abababab", 0, 0);
-
-    /* Nullable repetition must terminate and match, not loop (F1). */
-    ck_match("^(a*)*$", "aaa", 0, 1);
-    ck_group("^(a*)*$", "aaaaa", 0, 1, "");             /* last iter empty */
-    ck_match("^(a?)*$", "aaa", 0, 1);
-    ck_match("(a?)*b", "b", 0, 1);
-    ck_match("^(a*)+$", "aa", 0, 1);
-    ck_match("^()*$", "", 0, 1);
-    ck_match("(?:)*", "x", 0, 1);
-    ck_match("^(a|)*$", "aaa", 0, 1);                   /* nullable branch */
-    ck_match("^(|a)*$", "aaa", 0, 1);
-    ck_match("^(a*|b*)*$", "aabbb", 0, 1);
-    ck_match("x(.+)+y", "xabcy", 0, 1);                 /* progressing nest */
-
-    /* Repetition counts are bounded (F2): a huge or overflowing count is
-     * rejected rather than expanded or overflowed. */
-    ck_badpat("a{40000}");
-    ck_badpat("a{0,40000}");
-    ck_badpat("a{99999999999}");                        /* would overflow int */
-    ck_badpat("a{2,99999999999}");
-    ck_match("a{32767}", "a", 0, 0);                     /* at the cap: valid */
-
-    /* Greedy vs lazy capture extent. */
-    ck_group("a(.*)c", "axxcyyc", 0, 1, "xxcyy");       /* greedy */
-    ck_group("a(.*?)c", "axxcyyc", 0, 1, "xx");         /* lazy    */
-    ck_group("(a+)(a+)", "aaaa", 0, 1, "aaa");          /* greedy first */
-    ck_group("(a+?)(a+)", "aaaa", 0, 1, "a");           /* lazy first  */
-
-    /* Alternation precedence (leftmost alternative preferred). */
-    ck_group("(a|ab)", "ab", 0, 1, "a");
-    ck_match("^(a|ab)c$", "abc", 0, 1);                 /* must backtrack */
-    ck_match("foo|bar|baz", "xbazy", 0, 1);
-    ck_match("^(cat|dog|fish)$", "dog", 0, 1);
-
-    /* Nested groups and backreferences. */
-    ck_group("((a)(b))", "ab", 0, 2, "a");
-    ck_group("((a)(b))", "ab", 0, 3, "b");
-    ck_match("(a+)b\\1", "aabaa", 0, 1);
-    ck_match("(a+)b\\1", "aabaaa", 0, 1);               /* \1 = "aa" */
-    ck_match("^(a+)b\\1$", "aabaaa", 0, 0);             /* anchored, no */
-    ck_match("(['\"]).*?\\1", "say 'hi' there", 0, 1);  /* quote match */
-    ck_match("(a)(b)?c\\2", "ac", 0, 1);                /* unset \2 empty */
-
-    /* Classes: ranges, negation, POSIX, escapes inside brackets. */
-    ck_match("^[a-fA-F0-9]+$", "DeadBeef00", 0, 1);
-    ck_match("[^0-9]", "12345", 0, 0);
-    ck_match("[]]", "]", 0, 1);                         /* ] as first char */
-    ck_match("[a\\]b]+", "a]b", 0, 1);                  /* escaped ] */
-    ck_match("[\\t]", "\t", 0, 1);
-    ck_match("[[:space:][:digit:]]+", " 7\t9", 0, 1);
-    ck_match("[-a]", "-", 0, 1);                        /* leading dash */
-    ck_match("[a-]", "-", 0, 1);                        /* trailing dash */
-    ck_badpat("[a-\\");                                 /* range hi is a
-                                                         * trailing backslash */
-    ck_badpat("[z-a]");                                 /* reversed range */
-
-    /* Shorthand classes and their negations. */
-    ck_match("^\\d+\\.\\d+$", "3.14", 0, 1);
-    ck_match("\\D", "7", 0, 0);
-    ck_match("\\W", "_", 0, 0);
-    ck_match("\\W", "!", 0, 1);
-    ck_match("\\S+", "   ", 0, 0);
-    ck_match("\\bword\\b", ".word.", 0, 1);
-    ck_match("\\Bin\\B", "pointing", 0, 1);
-    ck_match("\\<the\\>", "the end", 0, 1);
-    ck_match("\\<the\\>", "theory", 0, 0);
-
-    /* Shorthand classes inside bracket expressions (F3): the whole
-     * membership joins the set, it is not read as a literal letter. */
-    ck_match("^[\\d]+$", "0123", 0, 1);
-    ck_match("[\\d]", "d", 0, 0);                        /* not literal 'd' */
-    ck_match("^[\\w]+$", "foo_1", 0, 1);
-    ck_match("[\\w]", "!", 0, 0);
-    ck_match("^[\\s]+$", " \t\n", 0, 1);
-    ck_match("[\\D]", "5", 0, 0);                        /* negated form */
-    ck_match("^[\\D]+$", "abc.", 0, 1);
-    ck_match("[\\W]", "_", 0, 0);
-    ck_match("[\\S]", " ", 0, 0);
-    ck_match("^[a\\d]+$", "a7a", 0, 1);                  /* mixed with literal */
-    ck_match("^[\\d\\s]+$", "1 2\t3", 0, 1);             /* two shorthands */
-    ck_match("^[x\\dy]+$", "x5y", 0, 1);                 /* shorthand mid-set */
-
-    /* Anchors and multiline. */
-    ck_match("^b", "a\nb", RX_MULTILINE, 1);
-    ck_match("^b", "a\nb", 0, 0);
-    ck_match("c$", "c\nd", RX_MULTILINE, 1);
-    ck_match(".", "\n", 0, 0);
-    ck_match(".", "\n", RX_DOTALL, 1);
-
-    /* Case folding. */
-    ck_match("^[a-z]+$", "AbCdEf", RX_ICASE, 1);
-    ck_match("^[^a-z]+$", "AbCdEf", RX_ICASE, 0);       /* negation + icase */
-    ck_match("(x)\\1", "xX", RX_ICASE, 1);              /* icase backref */
-
-    /* Hex and control escapes. */
-    ck_match("\\x41\\x42", "AB", 0, 1);
-    ck_match("a\\tb", "a\tb", 0, 1);
-    ck_match("\\x4", "\x04", 0, 1);                     /* one hex digit */
-    ck_match("\\x6a", "j", 0, 1);                       /* lowercase hex */
-    ck_match("\\x4A", "J", 0, 1);                       /* uppercase hex */
-    ck_match("\\xz", "xz", 0, 1);                       /* lone \x literal */
-    ck_match("\\n\\r\\f\\v\\a", "\n\r\f\v\a", 0, 1);    /* control escapes */
-
-    /* Interval edge forms. */
-    ck_match("^a{2,}$", "aaa", 0, 1);                   /* unbounded upper */
-    ck_match("^a{2,}$", "a", 0, 0);
-    ck_match("a{2,x}", "a{2,x}", 0, 1);                 /* malformed, literal */
-    ck_match("a{2z}", "a{2z}", 0, 1);                   /* malformed, literal */
-
-    /* Literal metacharacters via escaping. */
-    ck_match("a\\.c", "a.c", 0, 1);
-    ck_match("a\\.c", "abc", 0, 0);
-    ck_match("\\(\\)", "()", 0, 1);
-    ck_match("a\\+", "a+", 0, 1);
-    ck_match("100\\$", "100$", 0, 1);
-    ck_match("a{", "a{", 0, 1);                         /* bare { literal */
-    ck_match("a{x}", "a{x}", 0, 1);                     /* invalid interval */
-
-    /* Invalid patterns must be rejected, not crash. */
-    ck_badpat("(");
-    ck_badpat(")");
-    ck_badpat("a)");
-    ck_badpat("[a");
-    ck_badpat("[a-");
-    ck_badpat("*");
-    ck_badpat("+a");
-    ck_badpat("a\\");
-    ck_badpat("\\1");                                   /* no such group */
-    ck_badpat("(a)\\2");
-    ck_badpat("a{2,1}");
-    ck_badpat("[z-a]");
-    ck_badpat("[[:bogus:]]");
-    ck_badpat("[[:alpha]");                             /* unterminated [: */
-    ck_badpat("[\\");                                   /* trailing \ in [ */
-
-    /* The \0 escape compiles to a NUL byte matcher. */
-    ck_match("\\0", "", 0, 0);
-
-    /* Substitution variety. */
-    ck_sub("", "abc", "-", RX_GLOBAL, "-a-b-c-");
-    ck_sub("$", "abc", "!", 0, "abc!");
-    ck_sub("^", "abc", ">", 0, ">abc");
-    ck_sub("(\\w+) (\\w+)", "hello world", "\\2 \\1", 0, "world hello");
-    ck_sub("[aeiou]", "regular", "_", RX_GLOBAL, "r_g_l_r");
-    ck_sub("\\w+", "hi there", "\\U&\\E!", RX_GLOBAL, "HI! THERE!");
-    ck_sub("(\\w)(\\w*)", "mixED", "\\l\\1\\U\\2", 0, "mIXED");
-    ck_sub("x", "abc", "\\9", RX_GLOBAL, "abc");        /* no group 9 */
-    ck_sub("a", "a", "\\", 0, "\\");                    /* trailing bslash */
-    ck_sub("a", "a", "b\\u", 0, "b");                   /* dangling \\u */
-    ck_sub("o+", "foo", "0", 0, "f0");
-    ck_sub("l", "hello", "L", 0, "heLlo");              /* first only */
-    ck_sub("[0-9]+", "a1b22c333", "#", RX_GLOBAL, "a#b#c#");
-    ck_sub("\\&", "a&b", "and", 0, "aandb");            /* match literal & */
-    ck_sub("x", "x", "\\&", 0, "&");                    /* literal & in repl */
-    ck_sub("x", "x", "\\z", 0, "z");                    /* unknown \\ escape */
-    ck_sub("(\\w)", "abc", "\\u\\1", RX_GLOBAL, "ABC"); /* \\u one-shot */
-    ck_sub("(\\w)", "ABC", "\\l\\1", RX_GLOBAL, "abc"); /* \\l one-shot */
-    ck_sub("(\\w+)", "HELLO", "\\L\\1", 0, "hello");    /* \\L sticky */
-    ck_sub("x", "x", "\\n\\t\\r\\f\\v\\a\\\\", 0,       /* repl escapes */
-           "\n\t\r\f\v\a\\");
-    ck_sub("x", "x", "\\x41\\x42", 0, "AB");            /* hex escape */
-    ck_sub("x", "x", "\\x6a", 0, "j");                  /* lowercase hex */
-    ck_sub("x", "x", "\\x4", 0, "\x04");                /* one hex digit */
-    ck_sub("x", "x", "\\xg", 0, "xg");                  /* lone \\x literal */
-    ck_sub("x", "x", "\\x", 0, "x");                    /* trailing \\x */
-    ck_sub("a", "a", "", 0, "");                        /* empty result */
-
-    /* Parser recursion is bounded (F4): a pattern nested past the depth
-     * limit is a clean compile error, not a stack overflow. A deep but
-     * legal nest still compiles. */
-    {
-        char deep[9000];
-        int i, n;
-
-        n = 0;
-        for (i = 0; i < 4000; i++)
-            deep[n++] = '(';
-        deep[n++] = 'a';
-        for (i = 0; i < 4000; i++)
-            deep[n++] = ')';
-        deep[n] = '\0';
-        ck_badpat(deep);
-
-        n = 0;
-        for (i = 0; i < 500; i++)
-            deep[n++] = '(';
-        deep[n++] = 'a';
-        for (i = 0; i < 500; i++)
-            deep[n++] = ')';
-        deep[n] = '\0';
-        ck_match(deep, "a", 0, 1);                      /* legal deep nest */
-    }
-}
-
-/****************************************************************
- * Robustness: long inputs and catastrophic backtracking
- ****************************************************************/
-
-static void
-robustness(void)
-{
-    const char *err;
-    size_t big = 200000;
-    char *buf = malloc(big + 1);
-    rx_t *re;
-    rx_match m[2];
-    int i;
-
-    /* A long greedy match must not overflow the native stack. */
-    memset(buf, 'a', big);
-    buf[big] = '\0';
-    re = rx_compile(".*", 0, &err);
-    tests++;
-    if (!re || rx_exec(re, buf, big, 0, m, 1) != 1 ||
-        m[0].eo != (long)big) {
-        fails++;
-        printf("FAIL long greedy .* match\n");
-    }
-    rx_free(re);
-
-    /* Long backreference. */
-    re = rx_compile("(a+)\\1", 0, &err);
-    tests++;
-    if (!re || rx_exec(re, buf, big, 0, m, 2) != 1) {
-        fails++;
-        printf("FAIL long backreference\n");
-    }
-    rx_free(re);
-
-    /* Catastrophic pattern must hit the step budget and return an error
-     * rather than hang. */
-    {
-        char bad[64];
-
-        for (i = 0; i < 40; i++)
-            bad[i] = 'a';
-        bad[40] = 'X';
-        bad[41] = '\0';
-        re = rx_compile("(a+)+$", 0, &err);
-        tests++;
-        if (!re || rx_exec(re, bad, strlen(bad), 0, m, 2) != -1) {
-            fails++;
-            printf("FAIL catastrophic backtracking not bounded\n");
-        }
-        rx_free(re);
-    }
-
-    /* nmatch of 0 with a NULL match array must be safe. */
-    re = rx_compile("abc", 0, &err);
-    tests++;
-    if (!re || rx_exec(re, "zabc", 4, 0, NULL, 0) != 1) {
-        fails++;
-        printf("FAIL exec with nmatch 0\n");
-    }
-    rx_free(re);
-
-    /* A match far into a long subject makes rx_replace copy a prefix much
-     * larger than the output buffer's first growth step, exercising the
-     * repeated-doubling path in the string builder. */
-    {
-        char *out;
-
-        memset(buf, 'a', big);
-        buf[big - 1] = 'Z';
-        buf[big] = '\0';
-        re = rx_compile("Z", 0, &err);
-        out = rx_replace(re, buf, big, "!", 0);
-        tests++;
-        if (!out || strlen(out) != big || out[big - 1] != '!') {
-            fails++;
-            printf("FAIL long-prefix substitution\n");
-        }
-        free(out);
-        rx_free(re);
-    }
-
-    free(buf);
-}
-
-/* NULL-safe entry points and the group count accessor. */
-static void
-api_edge(void)
-{
-    const char *err;
-    rx_t *re = rx_compile("(a)(b)(c)", 0, &err);
-
-    tests++;
-    if (!re || rx_ngroups(re) != 3) {
-        fails++;
-        printf("FAIL rx_ngroups\n");
-    }
-    rx_free(re);
-
-    tests++;
-    if (rx_ngroups(NULL) != 0 ||
-        rx_exec(NULL, "x", 1, 0, NULL, 0) != -1 ||
-        rx_replace(NULL, "x", 1, "y", 0) != NULL ||
-        rx_matches_newline(NULL) != 0 ||
-        rx_search(NULL, "x", 1, 0, 0, NULL, 0) != -1) {
-        fails++;
-        printf("FAIL NULL-safe entry points\n");
-    }
-    rx_free(NULL);      /* must be a no-op */
-}
-
-/* Editor-oriented helpers: newline-span query and directional search. */
+/* Assert rx_matches_newline for a compiled pattern. */
 static void
 ck_nl(const char *pat, int flags, int want)
 {
@@ -511,7 +187,7 @@ ck_nl(const char *pat, int flags, int want)
     rx_free(re);
 }
 
-/* Assert a search finds a match starting at `wso` (or no match if wso<0). */
+/* Assert rx_search finds a match starting at `wso`, or no match if wso<0. */
 static void
 ck_search(const char *pat, const char *s, size_t from, int sflags, long wso)
 {
@@ -541,10 +217,495 @@ ck_search(const char *pat, const char *s, size_t from, int sflags, long wso)
     rx_free(re);
 }
 
+/* Assert rx_search returns an error (-1). */
 static void
-editor_api(void)
+ck_search_err(const char *pat, const char *s, size_t from, int sflags)
 {
-    /* A match is single-line unless it can contain a newline byte. */
+    const char *err;
+    rx_t *re = rx_compile(pat, 0, &err);
+    rx_match m[1];
+
+    tests++;
+    if (!re || rx_search(re, s, strlen(s), from, sflags, m, 1) != -1) {
+        fails++;
+        printf("FAIL search error /%s/ from %zu sf=%#x\n", pat, from, sflags);
+    }
+    rx_free(re);
+}
+
+/* Allocate `n` copies of `ch` plus a NUL terminator. */
+static char *
+alloc_filled(size_t n, int ch)
+{
+    char *b = malloc(n + 1);
+
+    if (b) {
+        memset(b, ch, n);
+        b[n] = '\0';
+    }
+    return b;
+}
+
+/* Fill `buf` (>= 42 bytes) with the classic catastrophic-backtracking
+ * subject: 40 'a's followed by a non-'a' so "(a+)+$" cannot match. */
+static void
+make_catastrophic(char *buf)
+{
+    memset(buf, 'a', 40);
+    buf[40] = 'X';
+    buf[41] = '\0';
+}
+
+/****************************************************************
+ * Correctness battery
+ ****************************************************************/
+
+static void
+t_empty_patterns(void)
+{
+    ck_match("", "", 0, 1);
+    ck_match("", "abc", 0, 1);
+    ck_match("^$", "", 0, 1);
+    ck_match("^$", "x", 0, 0);
+    ck_match("()", "x", 0, 1);
+    ck_match("(?:)", "x", 0, 1);
+    ck_match("a{0}", "b", 0, 1);        /* matches empty */
+    ck_match("a{0,0}b", "b", 0, 1);
+}
+
+static void
+t_quantifier_bounds(void)
+{
+    ck_match("^a{2,4}$", "a", 0, 0);
+    ck_match("^a{2,4}$", "aa", 0, 1);
+    ck_match("^a{2,4}$", "aaaa", 0, 1);
+    ck_match("^a{2,4}$", "aaaaa", 0, 0);
+    ck_match("^a{3}$", "aaa", 0, 1);
+    ck_match("^(ab){2,3}$", "ababab", 0, 1);
+    ck_match("^(ab){2,3}$", "abababab", 0, 0);
+}
+
+/* Nullable repetition must terminate and match, not loop (F1). */
+static void
+t_nullable_repetition(void)
+{
+    ck_match("^(a*)*$", "aaa", 0, 1);
+    ck_group("^(a*)*$", "aaaaa", 0, 1, "");             /* last iter empty */
+    ck_match("^(a?)*$", "aaa", 0, 1);
+    ck_match("(a?)*b", "b", 0, 1);
+    ck_match("^(a*)+$", "aa", 0, 1);
+    ck_match("^()*$", "", 0, 1);
+    ck_match("(?:)*", "x", 0, 1);
+    ck_match("^(a|)*$", "aaa", 0, 1);                   /* nullable branch */
+    ck_match("^(|a)*$", "aaa", 0, 1);
+    ck_match("^(a*|b*)*$", "aabbb", 0, 1);
+    ck_match("x(.+)+y", "xabcy", 0, 1);                 /* progressing nest */
+}
+
+/* Repetition counts are bounded (F2): a huge or overflowing count is
+ * rejected rather than expanded or overflowed. */
+static void
+t_repetition_counts(void)
+{
+    ck_badpat("a{40000}");
+    ck_badpat("a{0,40000}");
+    ck_badpat("a{99999999999}");                        /* would overflow int */
+    ck_badpat("a{2,99999999999}");
+    ck_match("a{32767}", "a", 0, 0);                     /* at the cap: valid */
+}
+
+static void
+t_greedy_lazy(void)
+{
+    ck_group("a(.*)c", "axxcyyc", 0, 1, "xxcyy");       /* greedy */
+    ck_group("a(.*?)c", "axxcyyc", 0, 1, "xx");         /* lazy    */
+    ck_group("(a+)(a+)", "aaaa", 0, 1, "aaa");          /* greedy first */
+    ck_group("(a+?)(a+)", "aaaa", 0, 1, "a");           /* lazy first  */
+}
+
+/* Alternation precedence (leftmost alternative preferred). */
+static void
+t_alternation(void)
+{
+    ck_group("(a|ab)", "ab", 0, 1, "a");
+    ck_match("^(a|ab)c$", "abc", 0, 1);                 /* must backtrack */
+    ck_match("foo|bar|baz", "xbazy", 0, 1);
+    ck_match("^(cat|dog|fish)$", "dog", 0, 1);
+}
+
+static void
+t_backreferences(void)
+{
+    ck_group("((a)(b))", "ab", 0, 2, "a");
+    ck_group("((a)(b))", "ab", 0, 3, "b");
+    ck_match("(a+)b\\1", "aabaa", 0, 1);
+    ck_match("(a+)b\\1", "aabaaa", 0, 1);               /* \1 = "aa" */
+    ck_match("^(a+)b\\1$", "aabaaa", 0, 0);             /* anchored, no */
+    ck_match("(['\"]).*?\\1", "say 'hi' there", 0, 1);  /* quote match */
+    ck_match("(a)(b)?c\\2", "ac", 0, 1);                /* unset \2 empty */
+}
+
+/* Classes: ranges, negation, POSIX, escapes inside brackets. */
+static void
+t_bracket_classes(void)
+{
+    ck_match("^[a-fA-F0-9]+$", "DeadBeef00", 0, 1);
+    ck_match("[^0-9]", "12345", 0, 0);
+    ck_match("[]]", "]", 0, 1);                         /* ] as first char */
+    ck_match("[a\\]b]+", "a]b", 0, 1);                  /* escaped ] */
+    ck_match("[\\t]", "\t", 0, 1);
+    ck_match("[[:space:][:digit:]]+", " 7\t9", 0, 1);
+    ck_match("[-a]", "-", 0, 1);                        /* leading dash */
+    ck_match("[a-]", "-", 0, 1);                        /* trailing dash */
+    ck_badpat("[a-\\");                                 /* range hi is a
+                                                         * trailing backslash */
+    ck_badpat("[z-a]");                                 /* reversed range */
+}
+
+/* Shorthand classes and their negations. */
+static void
+t_shorthand_classes(void)
+{
+    ck_match("^\\d+\\.\\d+$", "3.14", 0, 1);
+    ck_match("\\D", "7", 0, 0);
+    ck_match("\\W", "_", 0, 0);
+    ck_match("\\W", "!", 0, 1);
+    ck_match("\\S+", "   ", 0, 0);
+    ck_match("\\bword\\b", ".word.", 0, 1);
+    ck_match("\\Bin\\B", "pointing", 0, 1);
+    ck_match("\\<the\\>", "the end", 0, 1);
+    ck_match("\\<the\\>", "theory", 0, 0);
+}
+
+/* Shorthand classes inside bracket expressions (F3): the whole
+ * membership joins the set, it is not read as a literal letter. */
+static void
+t_shorthand_in_brackets(void)
+{
+    ck_match("^[\\d]+$", "0123", 0, 1);
+    ck_match("[\\d]", "d", 0, 0);                        /* not literal 'd' */
+    ck_match("^[\\w]+$", "foo_1", 0, 1);
+    ck_match("[\\w]", "!", 0, 0);
+    ck_match("^[\\s]+$", " \t\n", 0, 1);
+    ck_match("[\\D]", "5", 0, 0);                        /* negated form */
+    ck_match("^[\\D]+$", "abc.", 0, 1);
+    ck_match("[\\W]", "_", 0, 0);
+    ck_match("[\\S]", " ", 0, 0);
+    ck_match("^[a\\d]+$", "a7a", 0, 1);                  /* mixed with literal */
+    ck_match("^[\\d\\s]+$", "1 2\t3", 0, 1);             /* two shorthands */
+    ck_match("^[x\\dy]+$", "x5y", 0, 1);                 /* shorthand mid-set */
+}
+
+static void
+t_anchors_multiline(void)
+{
+    ck_match("^b", "a\nb", RX_MULTILINE, 1);
+    ck_match("^b", "a\nb", 0, 0);
+    ck_match("c$", "c\nd", RX_MULTILINE, 1);
+    ck_match(".", "\n", 0, 0);
+    ck_match(".", "\n", RX_DOTALL, 1);
+}
+
+static void
+t_case_folding(void)
+{
+    ck_match("^[a-z]+$", "AbCdEf", RX_ICASE, 1);
+    ck_match("^[^a-z]+$", "AbCdEf", RX_ICASE, 0);       /* negation + icase */
+    ck_match("(x)\\1", "xX", RX_ICASE, 1);              /* icase backref */
+}
+
+static void
+t_escapes(void)
+{
+    ck_match("\\x41\\x42", "AB", 0, 1);
+    ck_match("a\\tb", "a\tb", 0, 1);
+    ck_match("\\x4", "\x04", 0, 1);                     /* one hex digit */
+    ck_match("\\x6a", "j", 0, 1);                       /* lowercase hex */
+    ck_match("\\x4A", "J", 0, 1);                       /* uppercase hex */
+    ck_match("\\xz", "xz", 0, 1);                       /* lone \x literal */
+    ck_match("\\n\\r\\f\\v\\a", "\n\r\f\v\a", 0, 1);    /* control escapes */
+}
+
+static void
+t_interval_forms(void)
+{
+    ck_match("^a{2,}$", "aaa", 0, 1);                   /* unbounded upper */
+    ck_match("^a{2,}$", "a", 0, 0);
+    ck_match("a{2,x}", "a{2,x}", 0, 1);                 /* malformed, literal */
+    ck_match("a{2z}", "a{2z}", 0, 1);                   /* malformed, literal */
+}
+
+static void
+t_literal_metachars(void)
+{
+    ck_match("a\\.c", "a.c", 0, 1);
+    ck_match("a\\.c", "abc", 0, 0);
+    ck_match("\\(\\)", "()", 0, 1);
+    ck_match("a\\+", "a+", 0, 1);
+    ck_match("100\\$", "100$", 0, 1);
+    ck_match("a{", "a{", 0, 1);                         /* bare { literal */
+    ck_match("a{x}", "a{x}", 0, 1);                     /* invalid interval */
+}
+
+/* Invalid patterns must be rejected, not crash. */
+static void
+t_invalid_patterns(void)
+{
+    ck_badpat("(");
+    ck_badpat(")");
+    ck_badpat("a)");
+    ck_badpat("[a");
+    ck_badpat("[a-");
+    ck_badpat("*");
+    ck_badpat("+a");
+    ck_badpat("a\\");
+    ck_badpat("\\1");                                   /* no such group */
+    ck_badpat("(a)\\2");
+    ck_badpat("a{2,1}");
+    ck_badpat("[z-a]");
+    ck_badpat("[[:bogus:]]");
+    ck_badpat("[[:alpha]");                             /* unterminated [: */
+    ck_badpat("[\\");                                   /* trailing \ in [ */
+}
+
+/* The \0 escape compiles to a NUL byte matcher. */
+static void
+t_nul_byte(void)
+{
+    ck_match("\\0", "", 0, 0);
+}
+
+static void
+t_substitution(void)
+{
+    ck_sub("", "abc", "-", RX_GLOBAL, "-a-b-c-");
+    ck_sub("$", "abc", "!", 0, "abc!");
+    ck_sub("^", "abc", ">", 0, ">abc");
+    ck_sub("(\\w+) (\\w+)", "hello world", "\\2 \\1", 0, "world hello");
+    ck_sub("[aeiou]", "regular", "_", RX_GLOBAL, "r_g_l_r");
+    ck_sub("\\w+", "hi there", "\\U&\\E!", RX_GLOBAL, "HI! THERE!");
+    ck_sub("(\\w)(\\w*)", "mixED", "\\l\\1\\U\\2", 0, "mIXED");
+    ck_sub("x", "abc", "\\9", RX_GLOBAL, "abc");        /* no group 9 */
+    ck_sub("a", "a", "\\", 0, "\\");                    /* trailing bslash */
+    ck_sub("a", "a", "b\\u", 0, "b");                   /* dangling \\u */
+    ck_sub("o+", "foo", "0", 0, "f0");
+    ck_sub("l", "hello", "L", 0, "heLlo");              /* first only */
+    ck_sub("[0-9]+", "a1b22c333", "#", RX_GLOBAL, "a#b#c#");
+    ck_sub("\\&", "a&b", "and", 0, "aandb");            /* match literal & */
+    ck_sub("x", "x", "\\&", 0, "&");                    /* literal & in repl */
+    ck_sub("x", "x", "\\z", 0, "z");                    /* unknown \\ escape */
+    ck_sub("(\\w)", "abc", "\\u\\1", RX_GLOBAL, "ABC"); /* \\u one-shot */
+    ck_sub("(\\w)", "ABC", "\\l\\1", RX_GLOBAL, "abc"); /* \\l one-shot */
+    ck_sub("(\\w+)", "HELLO", "\\L\\1", 0, "hello");    /* \\L sticky */
+    ck_sub("x", "x", "\\n\\t\\r\\f\\v\\a\\\\", 0,       /* repl escapes */
+           "\n\t\r\f\v\a\\");
+    ck_sub("x", "x", "\\x41\\x42", 0, "AB");            /* hex escape */
+    ck_sub("x", "x", "\\x6a", 0, "j");                  /* lowercase hex */
+    ck_sub("x", "x", "\\x4", 0, "\x04");                /* one hex digit */
+    ck_sub("x", "x", "\\xg", 0, "xg");                  /* lone \\x literal */
+    ck_sub("x", "x", "\\x", 0, "x");                    /* trailing \\x */
+    ck_sub("a", "a", "", 0, "");                        /* empty result */
+}
+
+/* Parser recursion is bounded (F4): a pattern nested past the depth limit
+ * is a clean compile error, not a stack overflow. A deep but legal nest
+ * still compiles. */
+static void
+t_deep_nesting(void)
+{
+    char deep[9000];
+    int i, n;
+
+    n = 0;
+    for (i = 0; i < 4000; i++)
+        deep[n++] = '(';
+    deep[n++] = 'a';
+    for (i = 0; i < 4000; i++)
+        deep[n++] = ')';
+    deep[n] = '\0';
+    ck_badpat(deep);
+
+    n = 0;
+    for (i = 0; i < 500; i++)
+        deep[n++] = '(';
+    deep[n++] = 'a';
+    for (i = 0; i < 500; i++)
+        deep[n++] = ')';
+    deep[n] = '\0';
+    ck_match(deep, "a", 0, 1);                          /* legal deep nest */
+}
+
+static void
+battery(void)
+{
+    t_empty_patterns();
+    t_quantifier_bounds();
+    t_nullable_repetition();
+    t_repetition_counts();
+    t_greedy_lazy();
+    t_alternation();
+    t_backreferences();
+    t_bracket_classes();
+    t_shorthand_classes();
+    t_shorthand_in_brackets();
+    t_anchors_multiline();
+    t_case_folding();
+    t_escapes();
+    t_interval_forms();
+    t_literal_metachars();
+    t_invalid_patterns();
+    t_nul_byte();
+    t_substitution();
+    t_deep_nesting();
+}
+
+/****************************************************************
+ * Robustness: long inputs and catastrophic backtracking
+ ****************************************************************/
+
+/* A long greedy match must not overflow the native stack. */
+static void
+t_long_greedy(void)
+{
+    const char *err;
+    size_t big = 200000;
+    char *buf = alloc_filled(big, 'a');
+    rx_t *re = rx_compile(".*", 0, &err);
+    rx_match m[1];
+
+    tests++;
+    if (!re || !buf || rx_exec(re, buf, big, 0, m, 1) != 1 ||
+        m[0].eo != (long)big) {
+        fails++;
+        printf("FAIL long greedy .* match\n");
+    }
+    rx_free(re);
+    free(buf);
+}
+
+static void
+t_long_backref(void)
+{
+    const char *err;
+    size_t big = 200000;
+    char *buf = alloc_filled(big, 'a');
+    rx_t *re = rx_compile("(a+)\\1", 0, &err);
+    rx_match m[2];
+
+    tests++;
+    if (!re || !buf || rx_exec(re, buf, big, 0, m, 2) != 1) {
+        fails++;
+        printf("FAIL long backreference\n");
+    }
+    rx_free(re);
+    free(buf);
+}
+
+/* A catastrophic pattern must hit the step budget and return an error
+ * rather than hang. */
+static void
+t_catastrophic(void)
+{
+    char bad[64];
+
+    make_catastrophic(bad);
+    ck_match("(a+)+$", bad, 0, -1);
+}
+
+/* nmatch of 0 with a NULL match array must be safe. */
+static void
+t_nmatch_zero(void)
+{
+    const char *err;
+    rx_t *re = rx_compile("abc", 0, &err);
+
+    tests++;
+    if (!re || rx_exec(re, "zabc", 4, 0, NULL, 0) != 1) {
+        fails++;
+        printf("FAIL exec with nmatch 0\n");
+    }
+    rx_free(re);
+}
+
+/* A match far into a long subject makes rx_replace copy a prefix much
+ * larger than the output buffer's first growth step, exercising the
+ * repeated-doubling path in the string builder. */
+static void
+t_long_substitution(void)
+{
+    const char *err;
+    size_t big = 200000;
+    char *buf = alloc_filled(big, 'a');
+    rx_t *re = rx_compile("Z", 0, &err);
+    char *out;
+
+    if (buf)
+        buf[big - 1] = 'Z';
+    out = (re && buf) ? rx_replace(re, buf, big, "!", 0) : NULL;
+    tests++;
+    if (!out || strlen(out) != big || out[big - 1] != '!') {
+        fails++;
+        printf("FAIL long-prefix substitution\n");
+    }
+    free(out);
+    rx_free(re);
+    free(buf);
+}
+
+static void
+robustness(void)
+{
+    t_long_greedy();
+    t_long_backref();
+    t_catastrophic();
+    t_nmatch_zero();
+    t_long_substitution();
+}
+
+/****************************************************************
+ * Public-API edges and editor-oriented helpers
+ ****************************************************************/
+
+static void
+t_group_count(void)
+{
+    const char *err;
+    rx_t *re = rx_compile("(a)(b)(c)", 0, &err);
+
+    tests++;
+    if (!re || rx_ngroups(re) != 3) {
+        fails++;
+        printf("FAIL rx_ngroups\n");
+    }
+    rx_free(re);
+}
+
+static void
+t_null_safe(void)
+{
+    tests++;
+    if (rx_ngroups(NULL) != 0 ||
+        rx_exec(NULL, "x", 1, 0, NULL, 0) != -1 ||
+        rx_replace(NULL, "x", 1, "y", 0) != NULL ||
+        rx_matches_newline(NULL) != 0 ||
+        rx_search(NULL, "x", 1, 0, 0, NULL, 0) != -1) {
+        fails++;
+        printf("FAIL NULL-safe entry points\n");
+    }
+    rx_free(NULL);      /* must be a no-op */
+}
+
+static void
+api_edge(void)
+{
+    t_group_count();
+    t_null_safe();
+}
+
+/* A match is single-line unless it can contain a newline byte. */
+static void
+t_newline_span(void)
+{
     ck_nl("abc", 0, 0);
     ck_nl("a.c", 0, 0);                 /* dot excludes newline       */
     ck_nl("a.c", RX_DOTALL, 1);         /* unless DOTALL              */
@@ -554,48 +715,45 @@ editor_api(void)
     ck_nl("\\d", 0, 0);
     ck_nl("[^a]", 0, 1);                /* negated class includes it  */
     ck_nl("^foo$", RX_MULTILINE, 0);    /* anchors are zero-width     */
-    ck_nl("(a)b\\1", 0, 0);             /* backref of a newline-free group */
+    ck_nl("(a)b\\1", 0, 0);             /* backref of newline-free group */
     ck_nl("(\\n)\\1", 0, 1);
+}
 
-    /* Forward, backward, and wrap-around on three matches at 0, 8, 16. */
-    {
-        const char *t = "foo bar foo baz foo";
+/* Forward, backward, and wrap-around on three matches at 0, 8, 16. */
+static void
+t_search_directions(void)
+{
+    const char *t = "foo bar foo baz foo";
 
-        ck_search("foo", t, 0, 0, 0);
-        ck_search("foo", t, 1, 0, 8);
-        ck_search("foo", t, 9, 0, 16);
-        ck_search("foo", t, 17, 0, -1);              /* nothing after */
-        ck_search("foo", t, 17, RX_WRAP, 0);         /* wraps to top  */
-        ck_search("foo", t, 10, RX_BACKWARD, 8);     /* last before 10 */
-        ck_search("foo", t, 8, RX_BACKWARD, 0);      /* strictly before */
-        ck_search("foo", t, 0, RX_BACKWARD, -1);     /* nothing before */
-        ck_search("foo", t, 0, RX_BACKWARD | RX_WRAP, 16); /* wraps to last */
-        ck_search("zzz", t, 0, RX_WRAP, -1);         /* no match anywhere */
-    }
+    ck_search("foo", t, 0, 0, 0);
+    ck_search("foo", t, 1, 0, 8);
+    ck_search("foo", t, 9, 0, 16);
+    ck_search("foo", t, 17, 0, -1);                 /* nothing after */
+    ck_search("foo", t, 17, RX_WRAP, 0);            /* wraps to top  */
+    ck_search("foo", t, 10, RX_BACKWARD, 8);        /* last before 10 */
+    ck_search("foo", t, 8, RX_BACKWARD, 0);         /* strictly before */
+    ck_search("foo", t, 0, RX_BACKWARD, -1);        /* nothing before */
+    ck_search("foo", t, 0, RX_BACKWARD | RX_WRAP, 16); /* wraps to last */
+    ck_search("zzz", t, 0, RX_WRAP, -1);            /* no match anywhere */
+}
 
-    /* A matcher error (step budget) during a backward search propagates
-     * as -1 rather than being mistaken for "no match". */
-    {
-        const char *err;
-        char bad[64];
-        int i;
-        rx_t *re;
-        rx_match m[1];
+/* A matcher error (step budget) during a backward search propagates as
+ * -1 rather than being mistaken for "no match". */
+static void
+t_search_error(void)
+{
+    char bad[64];
 
-        for (i = 0; i < 40; i++)
-            bad[i] = 'a';
-        bad[40] = 'X';
-        bad[41] = '\0';
-        re = rx_compile("(a+)+$", 0, &err);
-        tests++;
-        if (!re ||
-            rx_search(re, bad, strlen(bad), strlen(bad),
-                      RX_BACKWARD, m, 1) != -1) {
-            fails++;
-            printf("FAIL backward search error propagation\n");
-        }
-        rx_free(re);
-    }
+    make_catastrophic(bad);
+    ck_search_err("(a+)+$", bad, strlen(bad), RX_BACKWARD);
+}
+
+static void
+editor_api(void)
+{
+    t_newline_span();
+    t_search_directions();
+    t_search_error();
 }
 
 /****************************************************************

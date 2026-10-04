@@ -4,6 +4,9 @@
  * via the Makefile `test` target. It includes ../rx.c directly for a
  * one-command build, but since it touches nothing beyond rx.h it could
  * equally link against a separately compiled rx.o.
+ *
+ * Each group of checks is its own small function; main() runs them in
+ * order.
  */
 
 #include <stdio.h>
@@ -69,24 +72,29 @@ expect_sub(const char *pat, const char *s, const char *repl, int flags,
     free(got);
 }
 
-int
-main(void)
+static void
+t_literals_dot(void)
 {
-    /* Literals and the dot. */
     expect_match("abc", "xabcy", 0, 1);
     expect_match("a.c", "abc", 0, 1);
     expect_match("a.c", "a\nc", 0, 0);
     expect_match("a.c", "a\nc", RX_DOTALL, 1);
+}
 
-    /* Quantifiers. */
+static void
+t_quantifiers(void)
+{
     expect_match("ab*c", "ac", 0, 1);
     expect_match("ab*c", "abbbc", 0, 1);
     expect_match("ab+c", "ac", 0, 0);
     expect_match("ab+c", "abc", 0, 1);
     expect_match("ab?c", "ac", 0, 1);
     expect_match("colou?r", "color", 0, 1);
+}
 
-    /* Intervals. */
+static void
+t_intervals(void)
+{
     expect_match("a{3}", "aaa", 0, 1);
     expect_match("a{3}", "aa", 0, 0);
     expect_match("a{2,3}", "aaaa", 0, 1);
@@ -94,56 +102,79 @@ main(void)
     expect_match("^a{2,}$", "aaaaa", 0, 1);
     expect_match("^a{,2}$", "aa", 0, 1);
     expect_match("^a{,2}$", "aaa", 0, 0);
+}
 
-    /* Anchors. */
+static void
+t_anchors(void)
+{
     expect_match("^abc$", "abc", 0, 1);
     expect_match("^abc$", "xabc", 0, 0);
     expect_match("^b$", "a\nb\nc", RX_MULTILINE, 1);
+}
 
-    /* Classes. */
+static void
+t_classes(void)
+{
     expect_match("[abc]+", "cab", 0, 1);
     expect_match("[^abc]", "a", 0, 0);
     expect_match("[a-z]+", "Hello", 0, 1);
     expect_match("[[:digit:]]+", "x123", 0, 1);
     expect_match("[[:alpha:]]+", "123", 0, 0);
+}
 
-    /* Shorthand classes. */
+static void
+t_shorthand(void)
+{
     expect_match("\\d{3}", "ab123", 0, 1);
     expect_match("\\w+", "foo_bar", 0, 1);
     expect_match("\\s", "a b", 0, 1);
     expect_match("\\D", "5", 0, 0);
+}
 
-    /* Word boundaries. */
+static void
+t_word_boundaries(void)
+{
     expect_match("\\bcat\\b", "a cat here", 0, 1);
     expect_match("\\bcat\\b", "concatenate", 0, 0);
     expect_match("\\<cat\\>", "the cat", 0, 1);
+}
 
-    /* Groups, alternation, backreferences. */
+static void
+t_groups_alt_backref(void)
+{
     expect_match("(ab)+", "ababab", 0, 1);
     expect_match("gr(a|e)y", "grey", 0, 1);
     expect_match("gr(a|e)y", "groy", 0, 0);
     expect_match("(.)\\1", "aa", 0, 1);
     expect_match("(.)\\1", "ab", 0, 0);
     expect_match("(?:ab)+c", "ababc", 0, 1);
+}
 
-    /* Case insensitivity. */
+static void
+t_case_insensitive(void)
+{
     expect_match("hello", "HELLO", RX_ICASE, 1);
     expect_match("[a-f]+", "ABCDEF", RX_ICASE, 1);
+}
 
-    /* Lazy quantifiers via capture inspection. */
-    {
-        const char *err;
-        rx_t *re = rx_compile("<(.*?)>", 0, &err);
-        rx_match m[2];
+/* Lazy quantifier, inspected through the capture extent. */
+static void
+t_lazy(void)
+{
+    const char *err;
+    rx_t *re = rx_compile("<(.*?)>", 0, &err);
+    rx_match m[2];
 
-        assert(re);
-        assert(rx_exec(re, "<a><b>", 6, 0, m, 2) == 1);
-        assert(m[1].eo - m[1].so == 1);        /* lazy: matched "a" only */
-        rx_free(re);
-        tests++;
-    }
+    assert(re);
+    assert(rx_exec(re, "<a><b>", 6, 0, m, 2) == 1);
+    assert(m[1].eo - m[1].so == 1);        /* lazy: matched "a" only */
+    rx_free(re);
+    tests++;
+}
 
-    /* Substitution. */
+static void
+t_substitution(void)
+{
     expect_sub("o", "foo", "0", 0, "f0o");
     expect_sub("o", "foo", "0", RX_GLOBAL, "f00");
     expect_sub("(\\w+)@(\\w+)", "user@host", "\\2.\\1", 0, "host.user");
@@ -154,38 +185,56 @@ main(void)
     expect_sub("x*", "abc", "-", RX_GLOBAL, "-a-b-c-");
     expect_sub("a*", "aa", "-", RX_GLOBAL, "-");
     expect_sub("a*", "aba", "-", RX_GLOBAL, "-b-");
+}
 
-    /* Editor helpers: newline-span query and directional search. */
-    {
-        const char *err;
-        rx_t *re;
-        rx_match m[1];
-        const char *t = "foo bar foo";    /* matches at 0 and 8 */
+/* Editor helpers: newline-span query and directional search. */
+static void
+t_editor(void)
+{
+    const char *err;
+    rx_t *re;
+    rx_match m[1];
+    const char *t = "foo bar foo";    /* matches at 0 and 8 */
 
-        re = rx_compile("a.c", 0, &err);
-        tests++;
-        if (!re || rx_matches_newline(re) != 0)
-            fails++, printf("FAIL matches_newline single-line\n");
-        rx_free(re);
+    re = rx_compile("a.c", 0, &err);
+    tests++;
+    if (!re || rx_matches_newline(re) != 0)
+        fails++, printf("FAIL matches_newline single-line\n");
+    rx_free(re);
 
-        re = rx_compile("a.c", RX_DOTALL, &err);
-        tests++;
-        if (!re || rx_matches_newline(re) != 1)
-            fails++, printf("FAIL matches_newline dotall\n");
-        rx_free(re);
+    re = rx_compile("a.c", RX_DOTALL, &err);
+    tests++;
+    if (!re || rx_matches_newline(re) != 1)
+        fails++, printf("FAIL matches_newline dotall\n");
+    rx_free(re);
 
-        re = rx_compile("foo", 0, &err);
-        tests++;
-        if (!re ||
-            rx_search(re, t, strlen(t), 1, 0, m, 1) != 1 || m[0].so != 8 ||
-            rx_search(re, t, strlen(t), 9, 0, m, 1) != 0 ||
-            rx_search(re, t, strlen(t), 9, RX_WRAP, m, 1) != 1 ||
-            m[0].so != 0 ||
-            rx_search(re, t, strlen(t), 8, RX_BACKWARD, m, 1) != 1 ||
-            m[0].so != 0)
-            fails++, printf("FAIL rx_search directions\n");
-        rx_free(re);
-    }
+    re = rx_compile("foo", 0, &err);
+    tests++;
+    if (!re ||
+        rx_search(re, t, strlen(t), 1, 0, m, 1) != 1 || m[0].so != 8 ||
+        rx_search(re, t, strlen(t), 9, 0, m, 1) != 0 ||
+        rx_search(re, t, strlen(t), 9, RX_WRAP, m, 1) != 1 || m[0].so != 0 ||
+        rx_search(re, t, strlen(t), 8, RX_BACKWARD, m, 1) != 1 ||
+        m[0].so != 0)
+        fails++, printf("FAIL rx_search directions\n");
+    rx_free(re);
+}
+
+int
+main(void)
+{
+    t_literals_dot();
+    t_quantifiers();
+    t_intervals();
+    t_anchors();
+    t_classes();
+    t_shorthand();
+    t_word_boundaries();
+    t_groups_alt_backref();
+    t_case_insensitive();
+    t_lazy();
+    t_substitution();
+    t_editor();
 
     printf("%d tests, %d failures\n", tests, fails);
     return fails ? 1 : 0;
