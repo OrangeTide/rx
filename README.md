@@ -36,10 +36,26 @@ make valgrind  # the same sweep under valgrind memcheck
 make cov       # line coverage; writes tests/rx.c.gcov
 ```
 
-The test sources live under `tests/`. `tests/torture.c` includes
-`rx.c` directly so the sanitizers and `gcov` see the whole engine as
-one translation unit. The torture target takes an optional iteration
-count, for example `./tests/torturet 100000`.
+The test sources live under `tests/`:
+
+- `tests/selftest.c` is a fast smoke test that drives only the public
+  API and doubles as a worked example of using it.
+- `tests/torture.c` is the heavy suite: a hand-verified correctness
+  battery, the allocation-failure sweep, and the fuzzer. It includes
+  `rx.c` directly so the sanitizers and `gcov` see the whole engine as
+  one translation unit, and so the fault sweep can hook its allocator.
+
+Both files are organized the same way. Each group of checks is a small
+single-concern function (for example `t_bracket_classes` or
+`t_search_directions`), a section driver such as `battery()` is just a
+list of those calls, and `main()` runs the drivers in order. To add a
+case, extend the matching function; to add a group, write a function and
+add one call to its driver. A handful of assertion helpers
+(`ck_match`, `ck_group`, `ck_sub`, `ck_badpat`, `ck_nl`, `ck_search`)
+each run one check and bump the pass/fail counters.
+
+The torture target takes an optional iteration count for the fuzzer, for
+example `./tests/torturet 100000`; `0` skips the fuzzer.
 
 The fault sweep routes every allocation in the engine through a hook that
 fails the Nth allocation in turn. For each operation it first counts the
