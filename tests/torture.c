@@ -243,6 +243,9 @@ battery(void)
     ck_match("[[:space:][:digit:]]+", " 7\t9", 0, 1);
     ck_match("[-a]", "-", 0, 1);                        /* leading dash */
     ck_match("[a-]", "-", 0, 1);                        /* trailing dash */
+    ck_badpat("[a-\\");                                 /* range hi is a
+                                                         * trailing backslash */
+    ck_badpat("[z-a]");                                 /* reversed range */
 
     /* Shorthand classes and their negations. */
     ck_match("^\\d+\\.\\d+$", "3.14", 0, 1);
@@ -443,6 +446,26 @@ robustness(void)
         printf("FAIL exec with nmatch 0\n");
     }
     rx_free(re);
+
+    /* A match far into a long subject makes rx_replace copy a prefix much
+     * larger than the output buffer's first growth step, exercising the
+     * repeated-doubling path in the string builder. */
+    {
+        char *out;
+
+        memset(buf, 'a', big);
+        buf[big - 1] = 'Z';
+        buf[big] = '\0';
+        re = rx_compile("Z", 0, &err);
+        out = rx_replace(re, buf, big, "!", 0);
+        tests++;
+        if (!out || strlen(out) != big || out[big - 1] != '!') {
+            fails++;
+            printf("FAIL long-prefix substitution\n");
+        }
+        free(out);
+        rx_free(re);
+    }
 
     free(buf);
 }
