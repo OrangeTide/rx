@@ -11,6 +11,60 @@ project and you have a working regex library. `rx.c` also carries a
 sed-like command-line tool behind the `RX_MAIN` compile flag. The tests
 live under `tests/`.
 
+## Using the library
+
+1. Copy `rx.c` and `rx.h` into your source tree.
+2. Include `rx.h` wherever you call the API.
+3. Compile `rx.c` alongside your own sources. It is an ordinary C99
+   translation unit with no dependencies beyond the C standard library.
+
+Recommended flags: `-std=c99 -O2 -Wall -Wextra`. Compile `rx.c` into its
+own object so it only rebuilds when it changes:
+
+```sh
+cc -std=c99 -O2 -Wall -Wextra -c rx.c -o rx.o
+cc -std=c99 -O2 -Wall -Wextra yourprog.c rx.o -o yourprog
+```
+
+A complete program that matches a pattern and prints the first capture:
+
+```c
+#include "rx.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+int main(void)
+{
+    const char *err;
+    rx_t *re = rx_compile("(\\w+)@(\\w+)", 0, &err);
+    const char *s = "contact: user@host today";
+    rx_match m[3];
+
+    if (!re) {
+        fprintf(stderr, "bad pattern: %s\n", err);
+        return 1;
+    }
+    if (rx_exec(re, s, strlen(s), 0, m, 3) == 1)
+        printf("user=%.*s host=%.*s\n",
+               (int)(m[1].eo - m[1].so), s + m[1].so,
+               (int)(m[2].eo - m[2].so), s + m[2].so);
+
+    rx_free(re);
+    return 0;
+}
+```
+
+```
+$ cc -std=c99 -O2 -Wall -Wextra demo.c rx.c -o demo && ./demo
+user=user host=host
+```
+
+The files are named `rx.*` rather than `regex.*` so the header does not
+clash with the POSIX `<regex.h>`; the two can be included together. The
+full API, including substitution and the editor helpers, is in the
+[C API](#c-api) section below.
+
 ## Building
 
 ```sh
@@ -70,20 +124,11 @@ behavior. Coverage of `rx.c` is about 97%; the remainder is a handful
 of defensively-unreachable branches and allocation-failure paths that are
 only reachable at a specific reallocation boundary.
 
-To embed the engine in another program, copy `rx.c` and `rx.h`
-into your source tree, include `rx.h` where you call the API, and
-compile `rx.c` as an ordinary translation unit (with `RX_MAIN`
-undefined). For example:
-
-```sh
-cc -c rx.c -o rx.o
-cc yourprog.c rx.o -o yourprog
-```
-
-`rx.h` is the whole public interface. The files are named `rx.*` rather
-than `regex.*` so the header does not clash with the POSIX `<regex.h>`.
-A few compile-time limits can be overridden with `-D` when building
-`rx.c`: `RX_STEP_LIMIT`, `RX_DUP_MAX`, and `RX_MAX_DEPTH`.
+See [Using the library](#using-the-library) above for how to compile
+`rx.c` into a program. When `RX_MAIN` is undefined (the default) it links
+as a plain library unit. A few compile-time limits can be overridden with
+`-D` when building `rx.c`: `RX_STEP_LIMIT`, `RX_DUP_MAX`, and
+`RX_MAX_DEPTH`.
 
 ## Pattern syntax
 
